@@ -8,6 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const { exec } = require('child_process');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = 3001;
@@ -96,18 +97,187 @@ const downloadGoogleDriveFile = async (fileId, filepath) => {
 };
 
 // Compress video using ffmpeg and output to final file path
-const compressVideo = (inputPath, outputPath) => {
+
+const compressVideo = (inputPath, outputPath, options = {}) => {
   return new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${inputPath}" -c:v libx264 -crf 22 -preset slow -tune film -maxrate 5M -bufsize 9M -vf "scale='if(gte(iw,ih),min(1280,iw),-2)':'if(lt(iw,ih),min(720,ih),-2)'" -c:a aac -b:a 128k -ac 2 -movflags +faststart -y "${outputPath}"`;
+    // Validate input file exists
+    if (!fs.existsSync(inputPath)) {
+      return reject(new Error(`Input file does not exist: ${inputPath}`));
+    }
+
+    // Default options with configurable parameters
+    const {
+      crf = 23,           // Slightly higher CRF for better compression
+      preset = 'medium',  // Faster preset for large files
+      maxrate = '3M',     // Lower bitrate for better compression
+      bufsize = '6M',     // Adjusted buffer size
+      audioBitrate = '96k', // Lower audio bitrate
+      maxWidth = 1280,
+      maxHeight = 720,
+      timeout = 300000,   // 5 minutes timeout (adjustable)
+      progressCallback = null
+    } = options;
+
+    // Build FFmpeg arguments array
+    const ffmpegArgs = [
+      '-i', inputPath,
+      '-c:v', 'libx264',
+      '-crf', crf.toString(),
+      '-preset', preset,
+      '-tune', 'film',
+      '-maxrate', maxrate,
+      '-bufsize', bufsize,
+      '-vf', `scale='if(gte(iw,ih),min(${maxWidth},iw),-2)':'if(lt(iw,ih),min(${maxHeight},ih),-2)'`,
+      '-c:a', 'aac',
+      '-b:a', audioBitrate,
+      '-ac', '2',
+      '-movflags', '+faststart',
+      '-progress', 'pipe:1',  // Enable progress reporting
+      '-y', outputPath
+    ];
+
+    console.log('Starting video compression...');
+    console.log('Input:', inputPath);
+    console.log('Output:', outputPath);
+
+    // Use spawn instead of exec for better handling of large outputs
+    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
     
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`FFmpeg compression failed: ${stderr || error.message}`));
+    let stderr = '';
+    let lastProgress = '';
+
+    // Set up timeout
+    const timeoutId = setTimeout(() => {
+      ffmpeg.kill('SIGKILL');
+      reject(new Error(`Video compression timed out after ${timeout}ms`));
+    }, timeout);
+
+    // Handle stdout for progress information
+    ffmpeg.stdout.on('data', (data) => {
+      const output = data.toString();
+      
+      // Parse progress information
+      if (output.includes('out_time_ms=')) {
+        const timeMatch = output.match(/out_time_ms=(\d+)/);
+        if (timeMatch && progressCallback) {
+          const timeMs = parseInt(timeMatch[1]);
+          const timeSeconds = Math.floor(timeMs / 1000000);
+          progressCallback({ timeSeconds, rawOutput: output });
+        }
+      }
+      
+      lastProgress = output;
+    });
+
+    // Handle stderr for error information
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    // Handle process completion
+    ffmpeg.on('close', (code) => {
+      clearTimeout(timeoutId);
+      
+      if (code === 0) {
+        // Verify output file was created and has content
+        if (fs.existsSync(outputPath)) {
+          const stats = fs.statSync(outputPath);
+          if (stats.size > 0) {
+            console.log('Video compression completed successfully');
+            console.log(`Output file size: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+            resolve({
+              success: true,
+              outputPath: outputPath,
+              outputSize: stats.size
+            });
+          } else {
+            reject(new Error('Output file is empty'));
+          }
+        } else {
+          reject(new Error('Output file was not created'));
+        }
       } else {
-        resolve();
+        reject(new Error(`FFmpeg process exited with code ${code}. Error: ${stderr}`));
       }
     });
+
+    // Handle process errors
+    ffmpeg.on('error', (error) => {
+      clearTimeout(timeoutId);
+      reject(new Error(`Failed to start FFmpeg process: ${error.message}`));
+    });
   });
+};
+
+// Enhanced wrapper function with retry logic
+const compressVideoWithRetry = async (inputPath, outputPath, options = {}, maxRetries = 2) => {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      console.log(`Compression attempt ${attempt}`);
+      
+      // Adjust options for retry attempts
+      const retryOptions = { ...options };
+      if (attempt > 1) {
+        // Use faster preset and higher CRF for retries
+        retryOptions.preset = 'fast';
+        retryOptions.crf = Math.min(28, (retryOptions.crf || 23) + 2);
+        retryOptions.timeout = (retryOptions.timeout || 300000) * 1.5; // Increase timeout
+        console.log(`Retry with adjusted settings: preset=${retryOptions.preset}, crf=${retryOptions.crf}`);
+      }
+      
+      const result = await compressVideo(inputPath, outputPath, retryOptions);
+      return result;
+      
+    } catch (error) {
+      lastError = error;
+      console.error(`Attempt ${attempt} failed:`, error.message);
+      
+      // Clean up failed output file
+      if (fs.existsSync(outputPath)) {
+        try {
+          fs.unlinkSync(outputPath);
+        } catch (cleanupError) {
+          console.warn('Failed to clean up output file:', cleanupError.message);
+        }
+      }
+      
+      if (attempt <= maxRetries) {
+        console.log(`Retrying in 2 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+  }
+  
+  throw lastError;
+};
+
+// Usage example with progress tracking
+const compressLargeVideo = async (inputPath, outputPath) => {
+  try {
+    const result = await compressVideoWithRetry(inputPath, outputPath, {
+      crf: 24,
+      preset: 'medium',
+      maxrate: '2.5M',
+      bufsize: '5M',
+      timeout: 600000, // 10 minutes for very large files
+      progressCallback: (progress) => {
+        console.log(`Progress: ${progress.timeSeconds}s processed`);
+      }
+    });
+    
+    console.log('Compression completed:', result);
+  } catch (error) {
+    console.error('Video compression failed:', error.message);
+    throw error;
+  }
+};
+
+module.exports = {
+  compressVideo,
+  compressVideoWithRetry,
+  compressLargeVideo
 };
 
 // Helper function to attempt download with compression
@@ -140,7 +310,7 @@ const attemptDownload = async (downloadUrl, finalFilePath) => {
           console.log(`Downloaded to temp file: ${tempFilePath}`);
           console.log(`Compressing video...`);
 
-          await compressVideo(tempFilePath, finalFilePath);
+          await compressLargeVideo(tempFilePath, finalFilePath);
 
           console.log(`Compression complete. Saved to: ${finalFilePath}`);
 
