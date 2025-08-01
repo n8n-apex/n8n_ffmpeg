@@ -48,7 +48,27 @@ const ensureTempDir = async () => {
 
 // Endpoint to merge thumbnail with video
 app.post('/merge-thumbnail-video', (req, res) => {
-  const { videoPath, thumbnailPath, thumbnailDuration = 0.3 } = req.body;
+  const { videoPath, thumbnailID, thumbnailDuration = 0.3 } = req.body;
+
+  videoPath = finalVideoPath;
+
+  let thumbnailPath = null;
+  let downloadedthumbnailPath = null;
+    if (thumbnailID) {
+        // Download thumbnail from URL
+        console.log('Downloading Thumbnail from google drive ID:', thumbnailID);
+        downloadedthumbnailPath = path.join('temp', `thumbnail_${uuidv4()}.mp3`);
+        try {
+          //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
+          await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${thumbnailID}`, downloadedthumbnailPath);
+          thumbnailPath = downloadedthumbnailPath;
+          console.log('Music downloaded to:', actualMusicPath);
+        } catch (downloadError) {
+          console.warn('Failed to download thumbnail:', downloadError.message);
+          // Continue without music if download fails
+        }
+       
+    }
   
   if (!videoPath || !thumbnailPath) {
     return res.status(400).json({ 
