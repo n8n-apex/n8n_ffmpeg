@@ -13,6 +13,11 @@ const { spawn } = require('child_process');
 const app = express();
 const PORT = 3001;
 
+// Global variables to store file paths
+let currentVideoPath = null;
+let processedVideoPath = null;
+let finalVideoPath = null;
+
 // Serve static files from the 'public' directory
 app.use(express.static('public'));
 
@@ -102,6 +107,8 @@ app.post('/merge-thumbnail-video', (req, res) => {
     
     // Store the processed video info
     const videoId = `video_${timestamp}`;
+
+    finalVideoPath = outputPath;
     
     res.json({
       success: true,
@@ -345,11 +352,6 @@ module.exports = {
   downloadGoogleDriveFile,
   extractGoogleDriveFileId
 };
-
-// Global variables to store file paths
-let currentVideoPath = null;
-let processedVideoPath = null;
-let finalVideoPath = null;
 
 // Health check endpoint
 app.get('/health', (req, res) => {
