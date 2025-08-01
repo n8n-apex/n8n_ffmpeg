@@ -48,9 +48,9 @@ const ensureTempDir = async () => {
 
 // Endpoint to merge thumbnail with video
 app.post('/merge-thumbnail-video', async (req, res) => {
-  const { videoPath, thumbnailID, thumbnailDuration = 0.3 } = req.body;
+  const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
 
-  videoPath = finalVideoPath;
+  let videoPath = finalVideoPath;
 
   let thumbnailPath = null;
   let downloadedthumbnailPath = null;
