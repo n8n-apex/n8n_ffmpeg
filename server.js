@@ -41,6 +41,94 @@ const ensureTempDir = async () => {
   }
 };
 
+// Endpoint to merge thumbnail with video
+app.post('/merge-thumbnail-video', (req, res) => {
+  const { videoPath, thumbnailPath, thumbnailDuration = 0.3 } = req.body;
+  
+  if (!videoPath || !thumbnailPath) {
+    return res.status(400).json({ 
+      error: 'videoPath and thumbnailPath are required' 
+    });
+  }
+  
+  // Validate input files exist
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ 
+      error: `Video file not found: ${videoPath}` 
+    });
+  }
+  
+  if (!fs.existsSync(thumbnailPath)) {
+    return res.status(404).json({ 
+      error: `Thumbnail file not found: ${thumbnailPath}` 
+    });
+  }
+  
+  try {
+    // Generate output path
+    const timestamp = Date.now();
+    const outputDir = '/tmp/';
+    const outputPath = path.join(outputDir, `final_video_${timestamp}.mp4`);
+    
+    // FFmpeg command to insert thumbnail at start
+    const ffmpegCommand = [
+      'ffmpeg',
+      '-loop', '1',
+      '-t', thumbnailDuration.toString(),
+      '-i', `"${thumbnailPath}"`,
+      '-i', `"${videoPath}"`,
+      '-filter_complex',
+      `"[0:v]scale=1080:1920,fps=30[thumb];[thumb][1:v]concat=n=2:v=1[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]"`,
+      '-map', '[outv]',
+      '-map', '[outa]',
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
+      '-y', // Overwrite output file
+      `"${outputPath}"`
+    ].join(' ');
+    
+    console.log('Executing FFmpeg command:', ffmpegCommand);
+    
+    // Execute FFmpeg command
+    execSync(ffmpegCommand, { stdio: 'inherit' });
+    
+    // Check if output file was created
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('Video processing failed - output file not created');
+    }
+    
+    // Get file stats
+    const stats = fs.statSync(outputPath);
+    
+    // Store the processed video info
+    const videoId = `video_${timestamp}`;
+    
+    res.json({
+      success: true,
+      videoId: videoId,
+      finalVideoPath: outputPath,
+      originalVideoPath: videoPath,
+      thumbnailPath: thumbnailPath,
+      thumbnailDuration: thumbnailDuration,
+      outputFileSize: stats.size,
+      processedAt: new Date().toISOString(),
+      message: `Video processed successfully with ${thumbnailDuration}s thumbnail intro`,
+      downloadUrl: `/get-final-video/${videoId}`
+    });
+    
+  } catch (error) {
+    console.error('Video processing error:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      originalVideoPath: videoPath,
+      thumbnailPath: thumbnailPath,
+      failedAt: new Date().toISOString()
+    });
+  }
+});
+
 // Utility function to download music file from URL
 const downloadMusicFile = async (url, filepath) => {
   const response = await axios({
