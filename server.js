@@ -116,7 +116,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     console.log('Executing FFmpeg command:', ffmpegCommand);
     
     // Execute FFmpeg command
-    execSync(ffmpegCommand, { stdio: 'inherit' });
+    exec(ffmpegCommand, { stdio: 'inherit' });
     
     // Check if output file was created
     if (!fsSync.existsSync(outputPath)) {
