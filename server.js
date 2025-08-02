@@ -57,7 +57,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     if (thumbnailID) {
         // Download thumbnail from URL
         console.log('Downloading Thumbnail from google drive ID:', thumbnailID);
-        downloadedthumbnailPath = path.join('temp', `thumbnail_${uuidv4()}.mp3`);
+        downloadedthumbnailPath = path.join('temp', `thumbnail_${uuidv4()}.png`);
         try {
           //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
           await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${thumbnailID}`, downloadedthumbnailPath);
