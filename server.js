@@ -93,8 +93,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
   try {
     // Generate output path
     const timestamp = Date.now();
-    const outputDir = '/tmp/';
-    const outputPath = path.join(outputDir, `final_video_${timestamp}.mp4`);
+    const outputPath = path.join('temp', `final_video_${timestamp}.mp4`);
     
     // FFmpeg command to insert thumbnail at start
     const ffmpegCommand = [
