@@ -47,8 +47,9 @@ const ensureTempDir = async () => {
 };
 
 // Endpoint to merge thumbnail with video
+// Endpoint to merge thumbnail with video
 app.post('/merge-thumbnail-video', async (req, res) => {
-  const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
+  const { thumbnailID, thumbnailDuration = 0.15 } = req.body;
 
   let videoPath = finalVideoPath;
   let thumbnailPath = null;
@@ -101,21 +102,23 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     
     console.log(`Video info - Width: ${width}, Height: ${height}, FPS: ${fps}`);
     
-    // Fixed FFmpeg command with proper SAR handling
+    // Fixed FFmpeg command - create silence at start, then add original audio
     const ffmpegCommand = [
       'ffmpeg',
+      '-f', 'lavfi',
+      '-t', thumbnailDuration.toString(),
+      '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`,
       '-loop', '1',
       '-t', thumbnailDuration.toString(),
       '-i', thumbnailPath,
       '-i', videoPath,
       '-filter_complex',
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1:1,fps=${fps}[thumb];[1:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]`,
+      `[1:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1:1,fps=${fps}[thumb];[2:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[0:a][2:a]concat=n=2:v=0:a=1[outa]`,
       '-map', '[outv]',
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-c:a', 'aac',
       '-pix_fmt', 'yuv420p',
-      '-shortest',
       '-y',
       outputPath
     ];
