@@ -78,13 +78,13 @@ app.post('/merge-thumbnail-video', async (req, res) => {
   }
   
   // Validate input files exist
-  if (!fs.existsSync(videoPath)) {
+  if (!fsSync.existsSync(videoPath)) {
     return res.status(404).json({ 
       error: `Video file not found: ${videoPath}` 
     });
   }
   
-  if (!fs.existsSync(thumbnailPath)) {
+  if (!fsSync.existsSync(thumbnailPath)) {
     return res.status(404).json({ 
       error: `Thumbnail file not found: ${thumbnailPath}` 
     });
@@ -119,7 +119,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     execSync(ffmpegCommand, { stdio: 'inherit' });
     
     // Check if output file was created
-    if (!fs.existsSync(outputPath)) {
+    if (!fsSync.existsSync(outputPath)) {
       throw new Error('Video processing failed - output file not created');
     }
     
