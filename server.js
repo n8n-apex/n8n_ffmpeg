@@ -100,17 +100,19 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       'ffmpeg',
       '-loop', '1',
       '-t', thumbnailDuration.toString(),
-      '-i', `"${thumbnailPath}"`,
-      '-i', `"${videoPath}"`,
-      '-filter_complex',
-      `"[0:v]scale=1080:1920,fps=30[thumb];[thumb][1:v]concat=n=2:v=1[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]"`,
+      '-i', thumbnailPath,
+      '-i', videoPath,
+      '-filter_complex', 
+      '[0:v]scale=1080:1920,fps=30[thumb];[thumb][1:v]concat=n=2:v=1:a=0[outv];[1:a]adelay=' + (thumbnailDuration * 1000) + '[outa]',
       '-map', '[outv]',
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-c:a', 'aac',
-      '-y', // Overwrite output file
-      `"${outputPath}"`
-    ].join(' ');
+      '-pix_fmt', 'yuv420p',
+      '-shortest',
+      '-y',
+      outputPath
+    ];
     
     console.log('Executing FFmpeg command:', ffmpegCommand);
     
