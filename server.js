@@ -62,7 +62,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
           //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
           await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${thumbnailID}`, downloadedthumbnailPath);
           thumbnailPath = downloadedthumbnailPath;
-          console.log('Music downloaded to:', actualMusicPath);
+          console.log('Music downloaded to:', thumbnailPath);
         } catch (downloadError) {
           console.warn('Failed to download thumbnail:', downloadError.message);
           // Continue without music if download fails
