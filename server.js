@@ -97,9 +97,11 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     
     // Get video info first to match dimensions and frame rate
     const videoInfo = await getVideoInfo(videoPath);
-    const { width = 1080, height = 1920, fps = 30 } = videoInfo;
+    const { width = 270, height = 480, fps = 30 } = videoInfo;
     
-    // Simplified FFmpeg command - concatenate thumbnail and video
+    console.log(`Video info - Width: ${width}, Height: ${height}, FPS: ${fps}`);
+    
+    // Fixed FFmpeg command with proper SAR handling
     const ffmpegCommand = [
       'ffmpeg',
       '-loop', '1',
@@ -107,12 +109,13 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-i', thumbnailPath,
       '-i', videoPath,
       '-filter_complex',
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps}[thumb];[thumb][1:v]concat=n=2:v=1:a=0[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1:1,fps=${fps}[thumb];[1:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]`,
       '-map', '[outv]',
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-c:a', 'aac',
       '-pix_fmt', 'yuv420p',
+      '-shortest',
       '-y',
       outputPath
     ];
@@ -234,12 +237,12 @@ const getVideoInfo = (videoPath) => {
       if (videoStream) {
         const fps = videoStream.r_frame_rate ? eval(videoStream.r_frame_rate) : 30;
         resolve({
-          width: videoStream.width || 1080,
-          height: videoStream.height || 1920,
+          width: videoStream.width || 270,
+          height: videoStream.height || 480,
           fps: Math.round(fps) || 30
         });
       } else {
-        resolve({ width: 1080, height: 1920, fps: 30 });
+        resolve({ width: 270, height: 480, fps: 30 });
       }
     });
   });
