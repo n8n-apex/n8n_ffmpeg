@@ -101,7 +101,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     
     console.log(`Video info - Width: ${width}, Height: ${height}, FPS: ${fps}`);
     
-    // Fixed FFmpeg command - thumbnail fills entire screen (cropped to fit)
+    // Fixed FFmpeg command - thumbnail fits completely with minimal padding
     const ffmpegCommand = [
       'ffmpeg',
       '-f', 'lavfi',
@@ -112,7 +112,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-i', thumbnailPath,
       '-i', videoPath,
       '-filter_complex',
-      `[1:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1:1,fps=${fps}[thumb];[2:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[0:a][2:a]concat=n=2:v=0:a=1[outa]`,
+      `[1:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1:1,fps=${fps}[thumb];[2:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[0:a][2:a]concat=n=2:v=0:a=1[outa]`,
       '-map', '[outv]',
       '-map', '[outa]',
       '-c:v', 'libx264',
