@@ -51,25 +51,25 @@ app.post('/merge-thumbnail-video', async (req, res) => {
   const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
 
   let videoPath = finalVideoPath;
-
   let thumbnailPath = null;
   let downloadedthumbnailPath = null;
-    if (thumbnailID) {
-        // Download thumbnail from URL
-        console.log('Downloading Thumbnail from google drive ID:', thumbnailID);
-        downloadedthumbnailPath = path.join('temp', `thumbnail_${uuidv4()}.png`);
-        try {
-          //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
-          await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${thumbnailID}`, downloadedthumbnailPath);
-          thumbnailPath = downloadedthumbnailPath;
-          console.log('Thumbnail downloaded to:', thumbnailPath);
-          console.log('VideoPath is:', videoPath);
-        } catch (downloadError) {
-          console.warn('Failed to download thumbnail:', downloadError.message);
-          // Continue without music if download fails
-        }
-       
+  
+  if (thumbnailID) {
+    // Download thumbnail from URL
+    console.log('Downloading Thumbnail from google drive ID:', thumbnailID);
+    downloadedthumbnailPath = path.join('temp', `thumbnail_${uuidv4()}.png`);
+    try {
+      await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${thumbnailID}`, downloadedthumbnailPath);
+      thumbnailPath = downloadedthumbnailPath;
+      console.log('Thumbnail downloaded to:', thumbnailPath);
+      console.log('VideoPath is:', videoPath);
+    } catch (downloadError) {
+      console.warn('Failed to download thumbnail:', downloadError.message);
+      return res.status(500).json({ 
+        error: 'Failed to download thumbnail: ' + downloadError.message 
+      });
     }
+  }
   
   if (!videoPath || !thumbnailPath) {
     return res.status(400).json({ 
@@ -95,13 +95,63 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     const timestamp = Date.now();
     const outputPath = path.join('temp', `final_video_${timestamp}.mp4`);
     
-    // FFmpeg command to insert thumbnail at start
-    const ffmpegCommand = `ffmpeg -loop 1 -t ${thumbnailDuration} -i "${thumbnailPath}" -i "${videoPath}" -filter_complex "[0:v]scale=1080:1920,fps=30[thumb];[thumb][1:v]concat=n=2:v=1:a=0[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]" -map "[outv]" -map "[outa]" -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "${outputPath}"`;
+    // Get video info first to match dimensions and frame rate
+    const videoInfo = await getVideoInfo(videoPath);
+    const { width = 1080, height = 1920, fps = 30 } = videoInfo;
     
-    console.log('Executing FFmpeg command:', ffmpegCommand);
+    // Simplified FFmpeg command - concatenate thumbnail and video
+    const ffmpegCommand = [
+      'ffmpeg',
+      '-loop', '1',
+      '-t', thumbnailDuration.toString(),
+      '-i', thumbnailPath,
+      '-i', videoPath,
+      '-filter_complex',
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps}[thumb];[thumb][1:v]concat=n=2:v=1:a=0[outv];[1:a]adelay=${thumbnailDuration * 1000}[outa]`,
+      '-map', '[outv]',
+      '-map', '[outa]',
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
+      '-pix_fmt', 'yuv420p',
+      '-y',
+      outputPath
+    ];
     
-    // Execute FFmpeg command
-    exec(ffmpegCommand, { stdio: 'inherit' });
+    console.log('Executing FFmpeg command:', ffmpegCommand.join(' '));
+    
+    // Execute FFmpeg command with proper async handling
+    await new Promise((resolve, reject) => {
+      const ffmpegProcess = spawn('ffmpeg', ffmpegCommand.slice(1), {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stderr = '';
+      
+      ffmpegProcess.stdout.on('data', (data) => {
+        console.log(`FFmpeg stdout: ${data}`);
+      });
+      
+      ffmpegProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+        console.log(`FFmpeg stderr: ${data}`);
+      });
+      
+      ffmpegProcess.on('close', (code) => {
+        if (code === 0) {
+          console.log('FFmpeg process completed successfully');
+          resolve();
+        } else {
+          console.error(`FFmpeg process exited with code ${code}`);
+          console.error('FFmpeg stderr:', stderr);
+          reject(new Error(`FFmpeg failed with exit code ${code}: ${stderr}`));
+        }
+      });
+      
+      ffmpegProcess.on('error', (error) => {
+        console.error('FFmpeg process error:', error);
+        reject(new Error(`FFmpeg process error: ${error.message}`));
+      });
+    });
     
     // Check if output file was created
     if (!fsSync.existsSync(outputPath)) {
@@ -109,12 +159,21 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     }
     
     // Get file stats
-    const stats = fs.statSync(outputPath);
+    const stats = await fs.stat(outputPath);
     
     // Store the processed video info
     const videoId = `video_${timestamp}`;
-
     finalVideoPath = outputPath;
+    
+    // Clean up downloaded thumbnail
+    if (downloadedthumbnailPath && fsSync.existsSync(downloadedthumbnailPath)) {
+      try {
+        await fs.unlink(downloadedthumbnailPath);
+        console.log('Cleaned up downloaded thumbnail');
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup thumbnail:', cleanupError.message);
+      }
+    }
     
     res.json({
       success: true,
@@ -132,6 +191,25 @@ app.post('/merge-thumbnail-video', async (req, res) => {
   } catch (error) {
     console.error('Video processing error:', error);
     
+    // Clean up files on error
+    const timestamp = Date.now();
+    const outputPath = path.join('temp', `final_video_${timestamp}.mp4`);
+    if (fsSync.existsSync(outputPath)) {
+      try {
+        await fs.unlink(outputPath);
+      } catch (unlinkError) {
+        console.warn('Failed to cleanup failed output file:', unlinkError.message);
+      }
+    }
+    
+    if (downloadedthumbnailPath && fsSync.existsSync(downloadedthumbnailPath)) {
+      try {
+        await fs.unlink(downloadedthumbnailPath);
+      } catch (unlinkError) {
+        console.warn('Failed to cleanup downloaded thumbnail:', unlinkError.message);
+      }
+    }
+    
     res.status(500).json({
       success: false,
       error: error.message,
@@ -141,6 +219,31 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     });
   }
 });
+
+// Helper function to get video information
+const getVideoInfo = (videoPath) => {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(videoPath, (err, metadata) => {
+      if (err) {
+        console.warn('Could not get video info, using defaults:', err.message);
+        resolve({ width: 1080, height: 1920, fps: 30 });
+        return;
+      }
+      
+      const videoStream = metadata.streams.find(stream => stream.codec_type === 'video');
+      if (videoStream) {
+        const fps = videoStream.r_frame_rate ? eval(videoStream.r_frame_rate) : 30;
+        resolve({
+          width: videoStream.width || 1080,
+          height: videoStream.height || 1920,
+          fps: Math.round(fps) || 30
+        });
+      } else {
+        resolve({ width: 1080, height: 1920, fps: 30 });
+      }
+    });
+  });
+};
 
 // Utility function to download music file from URL
 const downloadMusicFile = async (url, filepath) => {
