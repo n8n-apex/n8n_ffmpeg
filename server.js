@@ -256,31 +256,6 @@ const getVideoInfo = (videoPath) => {
   });
 };
 
-// Helper function to get video information
-const getVideoInfo = (videoPath) => {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(videoPath, (err, metadata) => {
-      if (err) {
-        console.warn('Could not get video info, using defaults:', err.message);
-        resolve({ width: 1080, height: 1920, fps: 30 });
-        return;
-      }
-      
-      const videoStream = metadata.streams.find(stream => stream.codec_type === 'video');
-      if (videoStream) {
-        const fps = videoStream.r_frame_rate ? eval(videoStream.r_frame_rate) : 30;
-        resolve({
-          width: videoStream.width || 270,
-          height: videoStream.height || 480,
-          fps: Math.round(fps) || 30
-        });
-      } else {
-        resolve({ width: 270, height: 480, fps: 30 });
-      }
-    });
-  });
-};
-
 // Utility function to download music file from URL
 const downloadMusicFile = async (url, filepath) => {
   const response = await axios({
