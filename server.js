@@ -46,13 +46,21 @@ const ensureTempDir = async () => {
   }
 };
 
-// Super simple and reliable two-step approach
+// Ultra simple approach - create thumbnail video then concat with list
 app.post('/merge-thumbnail-video', async (req, res) => {
+  console.log('=== Ultra Simple Merge Thumbnail Video ===');
+  console.log('Request body:', req.body);
+  
   const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
-
   let videoPath = finalVideoPath;
   let thumbnailPath = null;
   let downloadedthumbnailPath = null;
+  
+  if (!videoPath) {
+    return res.status(400).json({ 
+      error: 'No video file available. Please upload a video first.'
+    });
+  }
   
   if (thumbnailID) {
     console.log('Downloading Thumbnail from google drive ID:', thumbnailID);
@@ -68,12 +76,6 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     }
   }
   
-  if (!videoPath || !thumbnailPath) {
-    return res.status(400).json({ 
-      error: 'videoPath and thumbnailPath are required' 
-    });
-  }
-  
   if (!fsSync.existsSync(videoPath) || !fsSync.existsSync(thumbnailPath)) {
     return res.status(404).json({ 
       error: 'Video or thumbnail file not found' 
@@ -85,12 +87,12 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     const videoInfo = await getVideoInfo(videoPath);
     const { width, height, fps } = videoInfo;
     
-    console.log(`Creating thumbnail video with dimensions: ${width}x${height}, FPS: ${fps}`);
+    console.log(`Video dimensions: ${width}x${height}, FPS: ${fps}`);
     
-    // Step 1: Create thumbnail video
+    // Step 1: Create thumbnail video (no audio)
     const thumbnailVideoPath = path.join('temp', `thumb_video_${timestamp}.mp4`);
     
-    const createThumbCommand = [
+    await execCommand([
       'ffmpeg',
       '-loop', '1',
       '-i', thumbnailPath,
@@ -98,27 +100,36 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=${fps}`,
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
-      '-f', 'lavfi',
-      '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`,
-      '-c:a', 'aac',
-      '-shortest',
+      '-an', // no audio
       '-preset', 'fast',
       '-y',
       thumbnailVideoPath
-    ];
+    ], 'Creating thumbnail video');
     
-    console.log('Step 1 - Creating thumbnail video:', createThumbCommand.join(' '));
+    // Step 2: Add silent audio to thumbnail video
+    const thumbnailWithAudioPath = path.join('temp', `thumb_with_audio_${timestamp}.mp4`);
     
-    await execWithTimeout(createThumbCommand, 30000);
+    await execCommand([
+      'ffmpeg',
+      '-i', thumbnailVideoPath,
+      '-f', 'lavfi',
+      '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-c:v', 'copy',
+      '-c:a', 'aac',
+      '-shortest',
+      '-y',
+      thumbnailWithAudioPath
+    ], 'Adding audio to thumbnail');
     
-    // Step 2: Concatenate using file list
+    // Step 3: Create concatenation list
     const fileListPath = path.join('temp', `filelist_${timestamp}.txt`);
-    const fileListContent = `file '${path.resolve(thumbnailVideoPath)}'\nfile '${path.resolve(videoPath)}'`;
+    const fileListContent = `file '${path.resolve(thumbnailWithAudioPath)}'\nfile '${path.resolve(videoPath)}'`;
     await fs.writeFile(fileListPath, fileListContent);
     
+    // Step 4: Concatenate videos
     const outputPath = path.join('temp', `final_video_${timestamp}.mp4`);
     
-    const concatCommand = [
+    await execCommand([
       'ffmpeg',
       '-f', 'concat',
       '-safe', '0',
@@ -126,13 +137,9 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-c', 'copy',
       '-y',
       outputPath
-    ];
+    ], 'Concatenating videos');
     
-    console.log('Step 2 - Concatenating videos:', concatCommand.join(' '));
-    
-    await execWithTimeout(concatCommand, 30000);
-    
-    // Verify and respond
+    // Verify output
     if (!fsSync.existsSync(outputPath)) {
       throw new Error('Final video file was not created');
     }
@@ -141,24 +148,33 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     const videoId = `video_${timestamp}`;
     finalVideoPath = outputPath;
     
-    // Cleanup
-    const tempFiles = [thumbnailVideoPath, fileListPath];
-    if (downloadedthumbnailPath) tempFiles.push(downloadedthumbnailPath);
+    // Cleanup temp files
+    const tempFiles = [
+      thumbnailVideoPath, 
+      thumbnailWithAudioPath, 
+      fileListPath,
+      downloadedthumbnailPath
+    ].filter(Boolean);
     
     for (const tempFile of tempFiles) {
       try {
         if (fsSync.existsSync(tempFile)) {
           await fs.unlink(tempFile);
+          console.log(`Cleaned up: ${tempFile}`);
         }
       } catch (err) {
         console.warn(`Failed to cleanup ${tempFile}:`, err.message);
       }
     }
     
+    console.log('=== Process completed successfully ===');
+    
     res.json({
       success: true,
       videoId: videoId,
       finalVideoPath: outputPath,
+      originalVideoPath: videoPath,
+      thumbnailDuration: thumbnailDuration,
       outputFileSize: stats.size,
       processedAt: new Date().toISOString(),
       message: `Video processed successfully with ${thumbnailDuration}s thumbnail intro`,
@@ -175,37 +191,45 @@ app.post('/merge-thumbnail-video', async (req, res) => {
   }
 });
 
-// Helper function to execute FFmpeg commands with timeout
-const execWithTimeout = (command, timeoutMs = 30000) => {
+// Helper function to execute commands with better error handling
+const execCommand = (command, description = 'FFmpeg command') => {
   return new Promise((resolve, reject) => {
+    console.log(`${description}:`, command.join(' '));
+    
     const process = spawn('ffmpeg', command.slice(1), {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     
     const timeout = setTimeout(() => {
       process.kill('SIGKILL');
-      reject(new Error(`Command timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      reject(new Error(`${description} timed out after 60 seconds`));
+    }, 60000);
     
     let stderr = '';
     
     process.stderr.on('data', (data) => {
       stderr += data.toString();
-      console.log(`FFmpeg: ${data}`);
+      // Only log important error lines, not all FFmpeg output
+      const line = data.toString().trim();
+      if (line.includes('Error') || line.includes('failed') || line.includes('Invalid')) {
+        console.error(`FFmpeg Error: ${line}`);
+      }
     });
     
     process.on('close', (code) => {
       clearTimeout(timeout);
       if (code === 0) {
+        console.log(`${description} completed successfully`);
         resolve();
       } else {
-        reject(new Error(`FFmpeg failed with exit code ${code}: ${stderr}`));
+        console.error(`${description} failed with code ${code}`);
+        reject(new Error(`${description} failed: ${stderr.split('\n').slice(-5).join('\n')}`));
       }
     });
     
     process.on('error', (error) => {
       clearTimeout(timeout);
-      reject(error);
+      reject(new Error(`${description} process error: ${error.message}`));
     });
   });
 };
