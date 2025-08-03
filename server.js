@@ -89,7 +89,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     
     console.log(`Video dimensions: ${width}x${height}, FPS: ${fps}`);
     
-    // Step 1: Create thumbnail video (no audio)
+    // Step 1: Create thumbnail video (no audio) with exact frame rate
     const thumbnailVideoPath = path.join('temp', `thumb_video_${timestamp}.mp4`);
     
     await execCommand([
@@ -100,22 +100,26 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=${fps}`,
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
+      '-r', fps.toString(),
+      '-video_track_timescale', '30000',
       '-an', // no audio
       '-preset', 'fast',
       '-y',
       thumbnailVideoPath
     ], 'Creating thumbnail video');
     
-    // Step 2: Add silent audio to thumbnail video
+    // Step 2: Add silent audio to thumbnail video with exact duration
     const thumbnailWithAudioPath = path.join('temp', `thumb_with_audio_${timestamp}.mp4`);
     
     await execCommand([
       'ffmpeg',
       '-i', thumbnailVideoPath,
       '-f', 'lavfi',
-      '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-i', `anullsrc=channel_layout=stereo:sample_rate=48000:duration=${thumbnailDuration}`,
       '-c:v', 'copy',
       '-c:a', 'aac',
+      '-map', '0:v:0',
+      '-map', '1:a:0',
       '-shortest',
       '-y',
       thumbnailWithAudioPath
@@ -126,7 +130,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     const fileListContent = `file '${path.resolve(thumbnailWithAudioPath)}'\nfile '${path.resolve(videoPath)}'`;
     await fs.writeFile(fileListPath, fileListContent);
     
-    // Step 4: Concatenate videos
+    // Step 4: Concatenate videos with re-encoding to ensure sync
     const outputPath = path.join('temp', `final_video_${timestamp}.mp4`);
     
     await execCommand([
@@ -134,7 +138,12 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-f', 'concat',
       '-safe', '0',
       '-i', fileListPath,
-      '-c', 'copy',
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
+      '-r', fps.toString(),
+      '-pix_fmt', 'yuv420p',
+      '-preset', 'fast',
+      '-avoid_negative_ts', 'make_zero',
       '-y',
       outputPath
     ], 'Concatenating videos');
