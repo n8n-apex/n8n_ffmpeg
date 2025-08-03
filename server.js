@@ -47,7 +47,7 @@ const ensureTempDir = async () => {
 };
 
 // Super simple and reliable two-step approach
-app.post('/merge-thumbnail-video-simple', async (req, res) => {
+app.post('/merge-thumbnail-video', async (req, res) => {
   const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
 
   let videoPath = finalVideoPath;
