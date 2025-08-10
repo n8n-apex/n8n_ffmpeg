@@ -48,7 +48,7 @@ const ensureTempDir = async () => {
 
 // Endpoint to merge thumbnail with video
 app.post('/merge-thumbnail-video', async (req, res) => {
-  const { thumbnailID, thumbnailDuration = 0.3 } = req.body;
+  const { thumbnailID} = req.body;
 
   let videoPath = finalVideoPath;
   let thumbnailPath = null;
@@ -103,21 +103,6 @@ app.post('/merge-thumbnail-video', async (req, res) => {
     
     // Simplified FFmpeg command that's more reliable
     const ffmpegCommand = [
-      'ffmpeg',
-      '-loop', '1',
-      '-t', thumbnailDuration.toString(),
-      '-i', thumbnailPath,
-      '-i', videoPath,
-      '-filter_complex',
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1:1,fps=${fps},format=yuv420p[thumb];[1:v]setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[1:a]apad=pad_dur=${thumbnailDuration}[outa]`,
-      '-map', '[outv]',
-      '-map', '[outa]',
-      '-c:v', 'libx264',
-      '-c:a', 'aac',
-      '-pix_fmt', 'yuv420p',
-      '-preset', 'fast',
-      '-y',
-      outputPath
     ];
     
     console.log('Executing FFmpeg command:', ffmpegCommand.join(' '));
@@ -415,8 +400,6 @@ const handleVirusScanPage = async (fileId, filepath) => {
   // First, get the virus scan page
   const virusScanUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
   const htmlResponse = await axios({
-    method: 'GET',
-    url: virusScanUrl
   });
   
   const htmlContent = htmlResponse.data;
@@ -436,8 +419,8 @@ const handleVirusScanPage = async (fileId, filepath) => {
   const baseUrl = formActionMatch[1];
   const params = new URLSearchParams();
   params.append('id', idMatch[1]);
-  params.append('export', exportMatch[1]);
-  params.append('confirm', confirmMatch[1]);
+  params.append(]);
+  params.append();
   
   if (uuidMatch) {
     params.append('uuid', uuidMatch[1]);
@@ -451,10 +434,7 @@ const handleVirusScanPage = async (fileId, filepath) => {
 
 // Helper function to extract file ID from Google Drive URLs
 const extractGoogleDriveFileId = (url) => {
-  const patterns = [
-    /\/file\/d\/([a-zA-Z0-9-_]+)/,  // Standard share link
-    /id=([a-zA-Z0-9-_]+)/,          // Direct download link
-    /\/d\/([a-zA-Z0-9-_]+)/         // Short format
+  const patterns = 
   ];
   
   for (const pattern of patterns) {
@@ -504,12 +484,12 @@ app.post('/extract-audio', async (req, res) => {
     console.log('Extracting audio...');
     await new Promise((resolve, reject) => {
       ffmpeg(videoPath)
-        .output(audioPath)
+        .output()
         .audioCodec('pcm_s16le')
         .audioFrequency(16000)
         .audioChannels(1)
-        .on('end', resolve)
-        .on('error', reject)
+        .on()
+        .on()
         .run();
     });
     
@@ -519,10 +499,7 @@ app.post('/extract-audio', async (req, res) => {
     
     res.json({
       success: true,
-      audioUrl: audioUrl,
-      audioPath: audioPath,
-      videoPath: videoPath,
-      videoId: `${videoId}_input.mp4`
+      videoId: `${Id}_input.mp4`
     });
     
   } catch (error) {
@@ -532,7 +509,7 @@ app.post('/extract-audio', async (req, res) => {
 });
 
 // Serve temporary audio files
-app.get('/temp-audio/:filename', (req, res) => {
+app.get('/tempaudio/filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join('temp', filename);
   
@@ -544,7 +521,7 @@ app.get('/temp-audio/:filename', (req, res) => {
 });
 
 // Serve temporary video files
-app.get('/temp-video/:filename', (req, res) => {
+app.get('/temp-video/filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join('temp', filename);
   
@@ -556,7 +533,7 @@ app.get('/temp-video/:filename', (req, res) => {
 });
 
 // Process video to remove segments
-app.post('/process-video', async (req, res) => {
+app.post('/process-video', async (req) => {
   try {
     const { videoPath, filterComplex } = req.body;
     
@@ -568,9 +545,9 @@ app.post('/process-video', async (req, res) => {
     processedVideoPath = outputPath;
     
     console.log('Processing video with complex filter...');
-    console.log('Filter complex:', filterComplex);
-    console.log('CurrentVideoPath:', currentVideoPath);
-    console.log('ProcessedVideoPath:', processedVideoPath);
+    console.log('Filter complex:', filomplex);
+    console.log('Currentath:', currentVideoPath);
+    console.log(');
     
     // If no segments to remove, just copy the file
     if (!filterComplex) {
@@ -578,7 +555,7 @@ app.post('/process-video', async (req, res) => {
       res.json({
         success: true,
         message: 'No segments to remove, video copied as-is',
-        outputPath: outputPath
+        outputPath: outath
       });
       return;
     }
@@ -598,10 +575,6 @@ app.post('/process-video', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset veryfast',
-          '-crf 23',
-          '-threads 1',
-          '-avoid_negative_ts make_zero'  // Helps with timing issues
         ])
         .on('progress', (progress) => {
           console.log('Processing progress:', progress.percent + '%');
@@ -624,7 +597,7 @@ app.post('/process-video', async (req, res) => {
       outputPath: outputPath,
       stats: {
         originalSize: (await fs.stat(currentVideoPath)).size,
-        processedSize: (await fs.stat(outputPath)).size
+        processedSize: (await fs.stat(tPath)).size
       }
     });
     
@@ -637,7 +610,7 @@ app.post('/process-video', async (req, res) => {
 // Add background music and subtitles
 app.post('/add-music-subtitles', async (req, res) => {
   try {
-    const { videoPath, subtitleContent, srtSubtitles, googleDriveFileIDForMusic, videoUrl } = req.body;
+    const { videoPath, subtitleContent, srtSubtitles, googleDriveFileIDFoMusic, videoUrl } = req.body;
     
     if (!processedVideoPath) {
       return res.status(400).json({ error: 'No processed video available' });
@@ -673,9 +646,9 @@ app.post('/add-music-subtitles', async (req, res) => {
         downloadedMusicPath = path.join('temp', `music_${uuidv4()}.mp3`);
         try {
           //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
-          await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${googleDriveFileIDForMusic}`, downloadedMusicPath);
+          await downloadMusicFile(`https://drive.google.com/uc?export=download&id=${googleDriveFileIDForMusi}`, downloadedMusicPath);
           actualMusicPath = downloadedMusicPath;
-          console.log('Music downloaded to:', actualMusicPath);
+          console.log('Music downloaded to:', ctualMusiPath);
         } catch (downloadError) {
           console.warn('Failed to download music:', downloadError.message);
           // Continue without music if download fails
@@ -686,7 +659,7 @@ app.post('/add-music-subtitles', async (req, res) => {
     if (videoUrl) {
         // Download music from URL
         console.log('Downloading video from creatomate:', videoUrl);
-        downloadedVideoPath = path.join('temp', `video_${uuidv4()}.mp4`);
+        downloadedVideoPath = path.join('temp', `video_${uidv()}.mp4`);
         try {
           //await downloadFile(downloadedMusicPath, googleDriveFileIDForMusic);
           await downloadMusicFile(videoUrl, downloadedVideoPath);
@@ -743,12 +716,6 @@ app.post('/add-music-subtitles', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset veryfast',
-          '-crf 23',
-          '-threads 1',
-          '-avoid_negative_ts make_zero',
-          '-movflags', '+faststart',
-          '-y' // Overwrite output file if exists
         ])
         .on('start', (commandLine) => {
           console.log('FFmpeg command:', commandLine);
@@ -817,12 +784,11 @@ app.post('/add-music-subtitles', async (req, res) => {
 });
 
 // Get final video file
-app.get('/get-final-video', (req, res) => {
+app.get('/getfinalvideo', (req, res) => {
   if (!finalVideoPath || !fsSync.existsSync(finalVideoPath)) {
     return res.status(404).json({ error: 'Final video not found' });
   }
   
-  res.sendFile(path.resolve(finalVideoPath));
 });
 
 // Cleanup temporary files
