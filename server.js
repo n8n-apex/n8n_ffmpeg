@@ -9,6 +9,7 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const os = require('os');
 const { spawn } = require('child_process');
+const cv = require('@u4/opencv4nodejs');
 
 const app = express();
 const PORT = 3001;
@@ -633,6 +634,91 @@ app.post('/process-video', async (req, res) => {
     res.status(500).json({ error: 'Failed to process video', details: error.message });
   }
 });
+
+// Face detector
+const faceClassifier = new cv.CascadeClassifier(cv.HAAR_FRONTALFACE_ALT2);
+
+function scoreFrame(frame) {
+  const gray = frame.bgrToGray();
+
+  // 1. Face score
+  const faces = faceClassifier.detectMultiScale(gray).objects;
+  const faceScore = faces.length * 5;
+
+  // 2. Sharpness (variance of Laplacian)
+  const lap = gray.laplacian(cv.CV_64F);
+  const sharpness = lap.mean().w;
+  const sharpnessScore = Math.min(sharpness / 100, 10);
+
+  // 3. Brightness score (mean intensity)
+  const mean = gray.mean().w;
+  const brightnessScore = 10 - Math.abs(128 - mean) / 12.8;
+
+  return faceScore + sharpnessScore + brightnessScore;
+}
+
+async function pickBestThumbnail(videoPath, outputPath, samples = 10) {
+  const cap = new cv.VideoCapture(videoPath);
+  const frameCount = cap.get(cv.CAP_PROP_FRAME_COUNT);
+
+  let bestScore = -1;
+  let bestFrame = null;
+
+  for (let i = 0; i < samples; i++) {
+    const randomFrame = Math.floor(Math.random() * (frameCount - 10)) + 10;
+    cap.set(cv.CAP_PROP_POS_FRAMES, randomFrame);
+
+    let frame = cap.read();
+    if (frame.empty) continue;
+
+    const score = scoreFrame(frame);
+    if (score > bestScore) {
+      bestScore = score;
+      bestFrame = frame;
+    }
+  }
+
+  if (bestFrame) {
+    cv.imwrite(outputPath, bestFrame);
+    return { success: true, score: bestScore };
+  } else {
+    return { success: false, error: "Could not extract a thumbnail" };
+  }
+}
+
+app.post('/process-thumbnail', async (req, res) => {
+  try {
+    const { videoPath } = req.body;
+
+    if (!videoPath) {
+      return res.status(400).json({ error: 'No video file path provided' });
+    }
+
+    const outputPath = path.join('temp', `thumbnail_${uuidv4()}.jpg`);
+
+    console.log('Extracting best thumbnail from:', videoPath);
+
+    const result = await pickBestThumbnail(videoPath, outputPath);
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    res.json({
+      success: true,
+      message: 'Thumbnail extracted successfully',
+      outputPath,
+      score: result.score
+    });
+
+  } catch (error) {
+    console.error('Error extracting thumbnail:', error);
+    res.status(500).json({ error: 'Failed to extract thumbnail', details: error.message });
+  }
+});
+
+module.exports = app;
+
 
 // Add background music and subtitles
 app.post('/add-music-subtitles', async (req, res) => {
