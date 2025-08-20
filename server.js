@@ -9,7 +9,9 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const os = require('os');
 const { spawn } = require('child_process');
-const cv = require('@u4/opencv4nodejs');
+const sharp = require('sharp');
+const faceapi = require('@vladmandic/face-api');
+const canvas = require('canvas');
 
 const app = express();
 const PORT = 3001;
@@ -635,79 +637,96 @@ app.post('/process-video', async (req, res) => {
   }
 });
 
-// Face detector
-const faceClassifier = new cv.CascadeClassifier(cv.HAAR_FRONTALFACE_ALT2);
+// Setup face-api.js with node-canvas
+const { Canvas, Image, ImageData } = canvas;
+faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
-function scoreFrame(frame) {
-  const gray = frame.bgrToGray();
+app.use(express.json());
 
-  // 1. Face score
-  const faces = faceClassifier.detectMultiScale(gray).objects;
-  const faceScore = faces.length * 5;
+// Load face detection models at startup
+async function loadModels() {
+  const modelPath = path.join(__dirname, 'models'); // Download models into ./models
+  await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath);
+}
+loadModels();
 
-  // 2. Sharpness (variance of Laplacian)
-  const lap = gray.laplacian(cv.CV_64F);
-  const sharpness = lap.mean().w;
-  const sharpnessScore = Math.min(sharpness / 100, 10);
+async function scoreFrame(framePath) {
+  const img = await canvas.loadImage(framePath);
 
-  // 3. Brightness score (mean intensity)
-  const mean = gray.mean().w;
+  // Face detection
+  const detections = await faceapi.detectAllFaces(img);
+  const faceScore = detections.length * 5;
+
+  // Sharpness: variance of Laplacian approximated via edge count
+  const image = sharp(framePath).greyscale();
+  const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
+  let edges = 0;
+  for (let i = 1; i < data.length; i++) {
+    edges += Math.abs(data[i] - data[i - 1]);
+  }
+  const sharpnessScore = Math.min(edges / (data.length * 2), 10);
+
+  // Brightness: mean intensity
+  const mean = data.reduce((a, b) => a + b, 0) / data.length;
   const brightnessScore = 10 - Math.abs(128 - mean) / 12.8;
 
-  return faceScore + sharpnessScore + brightnessScore;
+  return { score: faceScore + sharpnessScore + brightnessScore, faceScore, sharpnessScore, brightnessScore };
 }
 
-async function pickBestThumbnail(videoPath, outputPath, samples = 10) {
-  const cap = new cv.VideoCapture(videoPath);
-  const frameCount = cap.get(cv.CAP_PROP_FRAME_COUNT);
+async function pickBestThumbnail(videoPath, samples = 10) {
+  const tempDir = path.join(__dirname, 'temp');
+  await fs.mkdir(tempDir, { recursive: true });
 
-  let bestScore = -1;
-  let bestFrame = null;
+  // Extract random frames using ffmpeg
+  const outputPattern = path.join(tempDir, `frame_%03d.jpg`);
+  await new Promise((resolve, reject) => {
+    exec(
+      `ffmpeg -i "${videoPath}" -vf "select='not(mod(n,${Math.floor(100)})'" -vsync vfr -frames:v ${samples} "${outputPattern}" -hide_banner -loglevel error`,
+      (error) => (error ? reject(error) : resolve())
+    );
+  });
 
-  for (let i = 0; i < samples; i++) {
-    const randomFrame = Math.floor(Math.random() * (frameCount - 10)) + 10;
-    cap.set(cv.CAP_PROP_POS_FRAMES, randomFrame);
-
-    let frame = cap.read();
-    if (frame.empty) continue;
-
-    const score = scoreFrame(frame);
-    if (score > bestScore) {
-      bestScore = score;
-      bestFrame = frame;
+  // Score frames
+  const files = await fs.readdir(tempDir);
+  let best = { score: -1, path: null };
+  for (const file of files) {
+    if (!file.endsWith('.jpg')) continue;
+    const framePath = path.join(tempDir, file);
+    const result = await scoreFrame(framePath);
+    if (result.score > best.score) {
+      best = { ...result, path: framePath };
     }
   }
 
-  if (bestFrame) {
-    cv.imwrite(outputPath, bestFrame);
-    return { success: true, score: bestScore };
-  } else {
-    return { success: false, error: "Could not extract a thumbnail" };
+  // Save best frame
+  if (best.path) {
+    const outputPath = path.join(tempDir, `thumbnail_${uuidv4()}.jpg`);
+    await fs.copyFile(best.path, outputPath);
+    return { success: true, outputPath, score: best.score };
   }
+
+  return { success: false, error: 'No valid frames extracted' };
 }
 
+// API endpoint
 app.post('/process-thumbnail', async (req, res) => {
   try {
     const { videoPath } = req.body;
-
     if (!videoPath) {
-      return res.status(400).json({ error: 'No video file path provided' });
+      return res.status(400).json({ error: 'No videoPath provided' });
     }
 
-    const outputPath = path.join('temp', `thumbnail_${uuidv4()}.jpg`);
-
-    console.log('Extracting best thumbnail from:', videoPath);
-
-    const result = await pickBestThumbnail(videoPath, outputPath);
+    console.log('Processing thumbnail for:', videoPath);
+    const result = await pickBestThumbnail(videoPath);
 
     if (!result.success) {
-      return res.status(500).json({ error: result.error });
+      return res.status(500).json(result);
     }
 
     res.json({
       success: true,
       message: 'Thumbnail extracted successfully',
-      outputPath,
+      outputPath: result.outputPath,
       score: result.score
     });
 
@@ -716,6 +735,8 @@ app.post('/process-thumbnail', async (req, res) => {
     res.status(500).json({ error: 'Failed to extract thumbnail', details: error.message });
   }
 });
+
+module.exports = app;
 
 module.exports = app;
 
