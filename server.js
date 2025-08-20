@@ -9,9 +9,6 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const os = require('os');
 const { spawn } = require('child_process');
-const sharp = require('sharp');
-const faceapi = require('@vladmandic/face-api');
-const canvas = require('canvas');
 
 const app = express();
 const PORT = 3001;
@@ -637,51 +634,37 @@ app.post('/process-video', async (req, res) => {
   }
 });
 
-// Setup face-api.js with node-canvas
-const { Canvas, Image, ImageData } = canvas;
-faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
-
-app.use(express.json());
-
-// Load face detection models at startup
-async function loadModels() {
-  const modelPath = path.join(__dirname, 'models'); // Download models into ./models
-  await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath);
-}
-loadModels();
-
+// Simple brightness & sharpness estimation using pixel differences
 async function scoreFrame(framePath) {
-  const img = await canvas.loadImage(framePath);
+  const data = await fs.readFile(framePath);
+  const pixels = [...data]; // crude byte-level scan
 
-  // Face detection
-  const detections = await faceapi.detectAllFaces(img);
-  const faceScore = detections.length * 5;
-
-  // Sharpness: variance of Laplacian approximated via edge count
-  const image = sharp(framePath).greyscale();
-  const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
-  let edges = 0;
-  for (let i = 1; i < data.length; i++) {
-    edges += Math.abs(data[i] - data[i - 1]);
+  // Fake "sharpness" = sum of differences between adjacent bytes
+  let diffSum = 0;
+  for (let i = 1; i < pixels.length; i++) {
+    diffSum += Math.abs(pixels[i] - pixels[i - 1]);
   }
-  const sharpnessScore = Math.min(edges / (data.length * 2), 10);
+  const sharpnessScore = Math.min(diffSum / pixels.length / 10, 10);
 
-  // Brightness: mean intensity
-  const mean = data.reduce((a, b) => a + b, 0) / data.length;
+  // Brightness: avg pixel value
+  const mean =
+    pixels.reduce((a, b) => a + b, 0) / pixels.length;
   const brightnessScore = 10 - Math.abs(128 - mean) / 12.8;
 
-  return { score: faceScore + sharpnessScore + brightnessScore, faceScore, sharpnessScore, brightnessScore };
+  // NOTE: No face detection here (to stay pure JS)
+  return { score: sharpnessScore + brightnessScore, sharpnessScore, brightnessScore };
 }
 
 async function pickBestThumbnail(videoPath, samples = 10) {
   const tempDir = path.join(__dirname, 'temp');
   await fs.mkdir(tempDir, { recursive: true });
 
-  // Extract random frames using ffmpeg
   const outputPattern = path.join(tempDir, `frame_%03d.jpg`);
+
+  // Extract frames with ffmpeg
   await new Promise((resolve, reject) => {
     exec(
-      `ffmpeg -i "${videoPath}" -vf "select='not(mod(n,${Math.floor(100)})'" -vsync vfr -frames:v ${samples} "${outputPattern}" -hide_banner -loglevel error`,
+      `ffmpeg -i "${videoPath}" -vf "fps=1" -frames:v ${samples} "${outputPattern}" -hide_banner -loglevel error`,
       (error) => (error ? reject(error) : resolve())
     );
   });
@@ -698,7 +681,6 @@ async function pickBestThumbnail(videoPath, samples = 10) {
     }
   }
 
-  // Save best frame
   if (best.path) {
     const outputPath = path.join(tempDir, `thumbnail_${uuidv4()}.jpg`);
     await fs.copyFile(best.path, outputPath);
@@ -738,7 +720,6 @@ app.post('/process-thumbnail', async (req, res) => {
 
 module.exports = app;
 
-module.exports = app;
 
 
 // Add background music and subtitles
