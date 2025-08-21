@@ -132,7 +132,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       const timeout = setTimeout(() => {
         ffmpegProcess.kill('SIGKILL');
         reject(new Error('FFmpeg process timed out after 60 seconds'));
-      }, 60000);
+      }, 90000);
       
       let stderr = '';
       
