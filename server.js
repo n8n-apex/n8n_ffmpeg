@@ -509,55 +509,72 @@ app.get('/health', (req, res) => {
 
 // Extract audio from video
 app.post('/extract-audio', async (req, res) => {
-  try {
-    const { googleDriveFileID } = req.body;
-    
-    if (!googleDriveFileID) {
-      return res.status(400).json({ error: 'Video ID is required' });
-    }
-
-    await ensureTempDir();
-    
-    // Download video
-    const videoId = uuidv4();
-    const videoPath = path.join('temp', `${videoId}_input.mp4`);
-    const audioPath = path.join('temp', `${videoId}_audio.wav`);
-    
-    console.log('Downloading video from google drive:', googleDriveFileID);
-    await downloadFile(videoPath, googleDriveFileID);
-    
-    // Store video path for later use
-    currentVideoPath = videoPath;
-    
-    // Extract audio
-    console.log('Extracting audio...');
-    await new Promise((resolve, reject) => {
-      ffmpeg(videoPath)
-        .output(audioPath)
-        .audioCodec('pcm_s16le')
-        .audioFrequency(16000)
-        .audioChannels(1)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-    
-    // Upload audio to a temporary hosting service or return local path
-    // For now, we'll assume you have a way to host the audio file
-    const audioUrl = `http://localhost:${PORT}/temp-audio/${path.basename(audioPath)}`;
-    
-    res.json({
-      success: true,
-      audioUrl: audioUrl,
-      audioPath: audioPath,
-      videoPath: videoPath,
-      videoId: `${videoId}_input.mp4`
-    });
-    
-  } catch (error) {
-    console.error('Error extracting audio:', error);
-    res.status(500).json({ error: 'Failed to extract audio', details: error.message });
-  }
+ try {
+   const { googleDriveFileID } = req.body;
+   
+   if (!googleDriveFileID) {
+     return res.status(400).json({ error: 'Video ID is required' });
+   }
+   await ensureTempDir();
+   
+   // Download video
+   const videoId = uuidv4();
+   const videoPath = path.join('temp', `${videoId}_input.mp4`);
+   const audioPath = path.join('temp', `${videoId}_audio.wav`);
+   
+   console.log('Downloading video from google drive:', googleDriveFileID);
+   await downloadFile(videoPath, googleDriveFileID);
+   
+   // Store video path for later use
+   currentVideoPath = videoPath;
+   
+   // Get video duration using FFprobe
+   console.log('Getting video duration...');
+   let videoDuration = null;
+   try {
+     const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${videoPath}"`;
+     const { stdout } = await new Promise((resolve, reject) => {
+       exec(ffprobeCommand, (error, stdout, stderr) => {
+         if (error) reject(error);
+         else resolve({ stdout, stderr });
+       });
+     });
+     videoDuration = parseFloat(stdout.trim());
+     console.log('Video duration:', videoDuration, 'seconds');
+   } catch (durationError) {
+     console.warn('Could not get video duration:', durationError.message);
+   }
+   
+   // Extract audio
+   console.log('Extracting audio...');
+   await new Promise((resolve, reject) => {
+     ffmpeg(videoPath)
+       .output(audioPath)
+       .audioCodec('pcm_s16le')
+       .audioFrequency(16000)
+       .audioChannels(1)
+       .on('end', resolve)
+       .on('error', reject)
+       .run();
+   });
+   
+   // Upload audio to a temporary hosting service or return local path
+   // For now, we'll assume you have a way to host the audio file
+   const audioUrl = `http://localhost:${PORT}/temp-audio/${path.basename(audioPath)}`;
+   
+   res.json({
+     success: true,
+     audioUrl: audioUrl,
+     audioPath: audioPath,
+     videoPath: videoPath,
+     videoId: `${videoId}_input.mp4`,
+     videoDuration: videoDuration
+   });
+   
+ } catch (error) {
+   console.error('Error extracting audio:', error);
+   res.status(500).json({ error: 'Failed to extract audio', details: error.message });
+ }
 });
 
 // Serve temporary audio files
