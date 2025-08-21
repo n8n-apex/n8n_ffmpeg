@@ -118,17 +118,21 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-i', thumbnailPath,
       '-i', videoPath,
       '-filter_complex',
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1:1,fps=${fps},format=yuv420p[thumb];[1:v]fps=${fps},setsar=1:1[video];[thumb][video]concat=n=2:v=1:a=0[outv];[1:a]apad=pad_dur=${thumbnailDuration}[outa]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1:1,fps=${fps},format=yuv420p[thumb];[1:v]fps=${fps},setsar=1:1,format=yuv420p[video];[thumb][video]concat=n=2:v=1:a=0[outv];[1:a]apad=pad_dur=${thumbnailDuration}[outa]`,
       '-map', '[outv]',
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-c:a', 'aac',
       '-pix_fmt', 'yuv420p',
-      '-preset', 'fast',
+      '-preset', 'medium', // Better quality than 'fast'
+      '-crf', '18', // High quality (lower = better, range: 0-51)
+      '-profile:v', 'high', // H.264 high profile for better compression
+      '-level', '4.0', // H.264 level
       '-r', fps.toString(), // Explicitly set output frame rate
-      '-maxrate', '2M', // Limit bitrate to prevent issues
-      '-bufsize', '4M', // Set buffer size
+      '-b:a', '192k', // Higher audio bitrate
+      '-ar', '48000', // High audio sample rate
       '-movflags', '+faststart', // Optimize for web playback
+      '-max_muxing_queue_size', '1024', // Prevent muxing issues
       '-y',
       outputPath
     ];
