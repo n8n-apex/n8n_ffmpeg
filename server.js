@@ -131,7 +131,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       // Set timeout to prevent hanging (60 seconds)
       const timeout = setTimeout(() => {
         ffmpegProcess.kill('SIGKILL');
-        reject(new Error('FFmpeg process timed out after 60 seconds'));
+        reject(new Error('FFmpeg process timed out after 90 seconds'));
       }, 90000);
       
       let stderr = '';
