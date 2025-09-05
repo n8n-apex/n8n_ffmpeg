@@ -545,29 +545,20 @@ app.post('/remove-silence', async (req, res) => {
     }
 });
 
-// Fixed version that removes video segments during silence
+// Working solution - audio-only silence removal that syncs video
 function removesilenceSimple(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
             reject(new Error('Processing timeout'));
         }, 540000);
 
-        // Use silencedetect to find silence, then remove those segments from both audio and video
         ffmpeg(inputPath)
-            .complexFilter([
-                // Detect silence and create segments
-                '[0:a]silencedetect=noise=-25dB:duration=0.3[silence]',
-                // Remove silence from both video and audio
-                '[0:v][0:a]silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-25dB:window=0.02[v][a]'
+            .audioFilters([
+                'silenceremove=start_periods=1:start_duration=0:start_threshold=-25dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-25dB'
             ])
-            .map('[v]')
-            .map('[a]')
-            .videoCodec('libx264')
+            .videoCodec('copy') // Copy video without re-encoding
             .audioCodec('aac')
-            .outputOptions([
-                '-crf', '28',
-                '-preset', 'fast'
-            ])
+            .outputOptions(['-avoid_negative_ts', 'make_zero'])
             .output(outputPath)
             .on('end', () => {
                 clearTimeout(timeout);
