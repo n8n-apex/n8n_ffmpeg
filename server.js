@@ -510,7 +510,12 @@ app.get('/health', (req, res) => {
 // Remove silence parts from video
 app.post('/remove-silence', async (req, res) => {
   try {
-    const { googleDriveFileID, silenceThreshold = '-30dB', minSilenceDuration = '0.5' } = req.body;
+    const { 
+      googleDriveFileID, 
+      silenceThreshold = '-30dB', 
+      minSilenceDuration = '0.5',
+      silenceDetectDuration = '0.3'
+    } = req.body;
     
     if (!googleDriveFileID) {
       return res.status(400).json({ error: 'Video ID is required' });
@@ -525,35 +530,124 @@ app.post('/remove-silence', async (req, res) => {
     console.log('Downloading video from google drive:', googleDriveFileID);
     await downloadFile(inputVideoPath, googleDriveFileID);
     
-    // Remove silence from video
-    console.log('Removing silence from video...');
-    await new Promise((resolve, reject) => {
+        // Step 1: Detect silence periods using silencedetect filter
+    console.log('Detecting silence periods...');
+    const silenceData = await new Promise((resolve, reject) => {
+      let silenceOutput = '';
+      
       ffmpeg(inputVideoPath)
-        .output(outputVideoPath)
-        // Audio filter to remove silence from start and end
-        .audioFilters([
-          `silenceremove=start_periods=1:start_duration=${minSilenceDuration}:start_threshold=${silenceThreshold}:detection=peak`,
-          `areverse`,
-          `silenceremove=start_periods=1:start_duration=${minSilenceDuration}:start_threshold=${silenceThreshold}:detection=peak`,
-          `areverse`
-        ])
-        // Video codec settings
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        // Maintain video quality
-        .addOptions(['-crf', '23'])
+        .audioFilters(`silencedetect=noise=${silenceThreshold}:duration=${silenceDetectDuration}`)
+        .format('null')
+        .output('-')
         .on('start', (commandLine) => {
-          console.log('FFmpeg command: ' + commandLine);
+          console.log('Silence detection command: ' + commandLine);
         })
-        .on('progress', (progress) => {
-          console.log('Processing: ' + Math.round(progress.percent) + '% done');
+        .on('stderr', (stderrLine) => {
+          silenceOutput += stderrLine + '\n';
         })
         .on('end', () => {
-          console.log('Silence removal completed');
+          resolve(silenceOutput);
+        })
+        .on('error', reject)
+        .run();
+    });
+    
+    // Step 2: Parse silence periods and create non-silent segments
+    console.log('Parsing silence data...');
+    const silenceRegex = /silence_start: ([\d.]+).*?silence_end: ([\d.]+)/g;
+    const silencePeriods = [];
+    let match;
+    
+    while ((match = silenceRegex.exec(silenceData)) !== null) {
+      const start = parseFloat(match[1]);
+      const end = parseFloat(match[2]);
+      const duration = end - start;
+      
+      // Only consider silences longer than minimum duration
+      if (duration >= parseFloat(minSilenceDuration)) {
+        silencePeriods.push({ start, end, duration });
+      }
+    }
+    
+    console.log(`Found ${silencePeriods.length} silence periods to remove`);
+    
+    // Step 3: Create segments of non-silent parts
+    const segments = [];
+    let currentStart = 0;
+    
+    for (const silence of silencePeriods) {
+      // Add segment before this silence
+      if (silence.start > currentStart) {
+        segments.push({
+          start: currentStart,
+          end: silence.start,
+          duration: silence.start - currentStart
+        });
+      }
+      currentStart = silence.end;
+    }
+    
+    // Add final segment if there's content after the last silence
+    if (originalDuration && currentStart < originalDuration) {
+      segments.push({
+        start: currentStart,
+        end: originalDuration,
+        duration: originalDuration - currentStart
+      });
+    }
+    
+    console.log(`Created ${segments.length} segments to keep`);
+    
+    if (segments.length === 0) {
+      return res.status(400).json({ error: 'No non-silent segments found' });
+    }
+    
+    // Step 4: Create filter complex for concatenation
+    let filterComplex = '';
+    let videoInputs = '';
+    let audioInputs = '';
+    
+    segments.forEach((segment, index) => {
+      // Create separate video and audio streams for each segment
+      filterComplex += `[0:v]trim=start=${segment.start}:end=${segment.end},setpts=PTS-STARTPTS[v${index}];`;
+      filterComplex += `[0:a]atrim=start=${segment.start}:end=${segment.end},asetpts=PTS-STARTPTS[a${index}];`;
+      
+      videoInputs += `[v${index}]`;
+      audioInputs += `[a${index}]`;
+    });
+    
+    // Concatenate all segments
+    filterComplex += `${videoInputs}concat=n=${segments.length}:v=1:a=0[outv];`;
+    filterComplex += `${audioInputs}concat=n=${segments.length}:v=0:a=1[outa]`;
+    
+    // Step 5: Process video with silence removal
+    console.log('Processing video with silence removal...');
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputVideoPath)
+        .complexFilter(filterComplex)
+        .outputOptions([
+          '-map', '[outv]',
+          '-map', '[outa]',
+          '-c:v', 'libx264',
+          '-c:a', 'aac',
+          '-crf', '23',
+          '-preset', 'medium'
+        ])
+        .output(outputVideoPath)
+        .on('start', (commandLine) => {
+          console.log('Processing command: ' + commandLine);
+        })
+        .on('progress', (progress) => {
+          if (progress.percent) {
+            console.log('Processing: ' + Math.round(progress.percent) + '% done');
+          }
+        })
+        .on('end', () => {
+          console.log('Video processing completed');
           resolve();
         })
         .on('error', (error) => {
-          console.error('Error removing silence:', error);
+          console.error('Error processing video:', error);
           reject(error);
         })
         .run();
@@ -565,11 +659,22 @@ app.post('/remove-silence', async (req, res) => {
     // Clean up input file (optional)
     // fs.unlinkSync(inputVideoPath);
     
+    // Calculate statistics
+    const totalSilenceRemoved = silencePeriods.reduce((sum, silence) => sum + silence.duration, 0);
+    
     res.json({
       success: true,
       videoUrl: videoUrl,
       videoPath: outputVideoPath,
       videoId: `${videoId}_output.mp4`,
+      silencePeriodsRemoved: silencePeriods.length,
+      segmentsKept: segments.length,
+      totalSilenceRemoved: totalSilenceRemoved,
+      settings: {
+        silenceThreshold,
+        minSilenceDuration,
+        silenceDetectDuration
+      }
       silenceThreshold: silenceThreshold,
       minSilenceDuration: minSilenceDuration
     });
