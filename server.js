@@ -508,7 +508,7 @@ app.get('/health', (req, res) => {
 });
 
 // Solution 1: Two-pass approach with silence detection and segment cutting
-app.post('/remove-silence-complete', async (req, res) => {
+app.post('/remove-silence', async (req, res) => {
     req.setTimeout(300000);
     res.setTimeout(300000);
     
@@ -698,113 +698,6 @@ function createConcatenatedVideo(inputPath, outputPath, segments) {
     });
 }
 
-// Solution 2: Simpler approach using silenceremove with video sync
-app.post('/remove-silence-synced', async (req, res) => {
-    req.setTimeout(300000);
-    res.setTimeout(300000);
-    
-    try {
-        const { googleDriveFileID } = req.body;
-        if (!googleDriveFileID) {
-            return res.status(400).json({ error: 'Video ID is required' });
-        }
-
-        await ensureTempDir();
-        const videoId = uuidv4();
-        const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
-        const audioOnlyPath = path.join('temp', `${videoId}_audio.wav`);
-        const processedAudioPath = path.join('temp', `${videoId}_processed_audio.wav`);
-        const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
-
-        console.log('Downloading video...');
-        await downloadFile(inputVideoPath, googleDriveFileID);
-
-        // Step 1: Extract audio
-        console.log('Extracting audio...');
-        await new Promise((resolve, reject) => {
-            ffmpeg(inputVideoPath)
-                .output(audioOnlyPath)
-                .audioCodec('pcm_s16le')
-                .on('end', resolve)
-                .on('error', reject)
-                .run();
-        });
-
-        // Step 2: Process audio to remove silence
-        console.log('Processing audio...');
-        await new Promise((resolve, reject) => {
-            ffmpeg(audioOnlyPath)
-                .audioFilters([
-                    'silenceremove=stop_periods=-1:stop_duration=0.2:stop_threshold=-15dB:detection=peak',
-                    'silenceremove=start_periods=1:start_duration=0.2:start_threshold=-15dB:detection=peak'
-                ])
-                .output(processedAudioPath)
-                .audioCodec('pcm_s16le')
-                .on('end', resolve)
-                .on('error', reject)
-                .run();
-        });
-
-        // Step 3: Get durations to calculate speed adjustment
-        const [originalDuration, newDuration] = await Promise.all([
-            getAudioDuration(audioOnlyPath),
-            getAudioDuration(processedAudioPath)
-        ]);
-
-        const speedFactor = originalDuration / newDuration;
-        console.log(`Original: ${originalDuration}s, New: ${newDuration}s, Speed factor: ${speedFactor}`);
-
-        // Step 4: Speed up video to match processed audio duration
-        console.log('Syncing video with processed audio...');
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Processing timeout')), 240000);
-            
-            ffmpeg()
-                .input(inputVideoPath)
-                .input(processedAudioPath)
-                .complexFilter([
-                    `[0:v]setpts=PTS/${speedFactor}[speedvideo]`
-                ])
-                .map('[speedvideo]')
-                .map('1:a')
-                .videoCodec('libx264')
-                .audioCodec('aac')
-                .outputOptions(['-crf', '28', '-preset', 'fast', '-shortest'])
-                .output(outputVideoPath)
-                .on('progress', (progress) => {
-                    if (progress.percent) console.log('Progress:', Math.round(progress.percent) + '%');
-                })
-                .on('end', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                })
-                .on('error', (error) => {
-                    clearTimeout(timeout);
-                    reject(error);
-                })
-                .run();
-        });
-
-        // Cleanup temp files
-        await Promise.allSettled([
-            fs.unlink(audioOnlyPath),
-            fs.unlink(processedAudioPath)
-        ]);
-
-        const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
-        res.json({ 
-            success: true, 
-            videoUrl: videoUrl, 
-            message: `Silence removed with video sync (${speedFactor.toFixed(2)}x speed adjustment)`,
-            method: 'synced_removal'
-        });
-
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Processing failed', details: error.message });
-    }
-});
-
 // Helper function to get audio duration
 function getAudioDuration(filePath) {
     return new Promise((resolve, reject) => {
@@ -817,80 +710,6 @@ function getAudioDuration(filePath) {
         });
     });
 }
-
-// Solution 3: Enhanced version of your original with better sync
-app.post('/remove-silence', async (req, res) => {
-    req.setTimeout(300000);
-    res.setTimeout(300000);
-    
-    try {
-        const { googleDriveFileID } = req.body;
-        if (!googleDriveFileID) {
-            return res.status(400).json({ error: 'Video ID is required' });
-        }
-
-        await ensureTempDir();
-        const videoId = uuidv4();
-        const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
-        const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
-
-        console.log('Downloading video...');
-        await downloadFile(inputVideoPath, googleDriveFileID);
-
-        console.log('Applying enhanced silence removal...');
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Processing timeout')), 240000);
-            
-            ffmpeg(inputVideoPath)
-                .complexFilter([
-                    // Process audio
-                    '[0:a]silenceremove=stop_periods=-1:stop_duration=0.2:stop_threshold=-15dB:detection=peak,' +
-                    'silenceremove=start_periods=1:start_duration=0.2:start_threshold=-15dB:detection=peak[aclean]',
-                    
-                    // Create a reference for video timing based on processed audio
-                    '[aclean]showvolume=f=0.5:b=4:w=720:h=68[volvis];' +
-                    '[0:v][volvis]overlay=0:H-h[vout]'
-                ])
-                .map('[vout]')
-                .map('[aclean]')
-                .videoCodec('libx264')
-                .audioCodec('aac')
-                .outputOptions([
-                    '-crf', '28', 
-                    '-preset', 'fast',
-                    '-avoid_negative_ts', 'make_zero',
-                    '-fflags', '+genpts'
-                ])
-                .output(outputVideoPath)
-                .on('start', (cmd) => console.log('Command:', cmd))
-                .on('progress', (progress) => {
-                    if (progress.percent) console.log('Progress:', Math.round(progress.percent) + '%');
-                })
-                .on('end', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                })
-                .on('error', (error) => {
-                    clearTimeout(timeout);
-                    reject(error);
-                })
-                .run();
-        });
-
-        const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
-        res.json({ 
-            success: true, 
-            videoUrl: videoUrl, 
-            videoId: `${videoId}_output.mp4`,
-            message: 'Enhanced silence removal with volume visualization',
-            method: 'enhanced'
-        });
-
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Processing failed', details: error.message });
-    }
-});
 
 // Serve temporary audio files
 app.get('/temp-audio/:filename', (req, res) => {
