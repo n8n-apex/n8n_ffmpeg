@@ -579,14 +579,12 @@ function removesilenceSimple(inputPath, outputPath) {
                 })
                 .on('end', () => {
                     if (silencePeriods.length === 0) {
-                        // No silence, copy original
                         ffmpeg(inputPath).output(outputPath)
                             .on('end', () => { clearTimeout(timeout); resolve(); })
                             .on('error', reject).run();
                         return;
                     }
 
-                    // Build keep segments
                     let keepSegments = [];
                     let lastEnd = 0;
                     
@@ -597,8 +595,10 @@ function removesilenceSimple(inputPath, outputPath) {
                         lastEnd = silence.end;
                     });
                     
+                    // Add 0.3 sec padding to the end
                     if (lastEnd < videoDuration) {
-                        keepSegments.push(`gte(t,${lastEnd})`);
+                        const endTime = Math.min(lastEnd + 0.3, videoDuration);
+                        keepSegments.push(`between(t,${lastEnd},${endTime})`);
                     }
 
                     if (keepSegments.length === 0) {
@@ -620,7 +620,6 @@ function removesilenceSimple(inputPath, outputPath) {
         });
     });
 }
-
 // Serve temporary audio files
 app.get('/temp-audio/:filename', (req, res) => {
   const filename = req.params.filename;
