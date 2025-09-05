@@ -545,20 +545,16 @@ app.post('/remove-silence', async (req, res) => {
     }
 });
 
-// Detect silence and cut video segments
 function removesilenceSimple(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            reject(new Error('Processing timeout'));
-        }, 540000);
+        const timeout = setTimeout(() => reject(new Error('Processing timeout')), 540000);
 
-        // First pass: detect silence periods
         let silencePeriods = [];
+        let currentStart = null;
         let videoDuration = 0;
 
         ffmpeg.ffprobe(inputPath, (err, metadata) => {
             if (err) return reject(err);
-            
             videoDuration = metadata.format.duration;
             
             ffmpeg(inputPath)
@@ -566,49 +562,54 @@ function removesilenceSimple(inputPath, outputPath) {
                 .format('null')
                 .output('-')
                 .on('stderr', (line) => {
-                    const startMatch = line.match(/silence_start: ([\d.]+)/);
-                    const endMatch = line.match(/silence_end: ([\d.]+)/);
-                    
-                    if (startMatch && endMatch) {
-                        silencePeriods.push({
-                            start: parseFloat(startMatch[1]),
-                            end: parseFloat(endMatch[1])
-                        });
+                    if (line.includes('silence_start:')) {
+                        const match = line.match(/silence_start: ([\d.]+)/);
+                        if (match) currentStart = parseFloat(match[1]);
+                    }
+                    if (line.includes('silence_end:') && currentStart !== null) {
+                        const match = line.match(/silence_end: ([\d.]+)/);
+                        if (match) {
+                            silencePeriods.push({
+                                start: currentStart,
+                                end: parseFloat(match[1])
+                            });
+                            currentStart = null;
+                        }
                     }
                 })
                 .on('end', () => {
-                    // Create filter to remove silence segments
                     if (silencePeriods.length === 0) {
-                        // No silence found, just copy
-                        ffmpeg(inputPath)
-                            .output(outputPath)
+                        // No silence, copy original
+                        ffmpeg(inputPath).output(outputPath)
                             .on('end', () => { clearTimeout(timeout); resolve(); })
-                            .on('error', reject)
-                            .run();
+                            .on('error', reject).run();
                         return;
                     }
 
-                    // Build segments to keep
-                    let segments = [];
+                    // Build keep segments
+                    let keepSegments = [];
                     let lastEnd = 0;
                     
                     silencePeriods.forEach(silence => {
-                        if (silence.start > lastEnd + 0.1) {
-                            segments.push(`between(t,${lastEnd},${silence.start})`);
+                        if (silence.start > lastEnd) {
+                            keepSegments.push(`between(t,${lastEnd},${silence.start})`);
                         }
                         lastEnd = silence.end;
                     });
                     
-                    if (lastEnd < videoDuration - 0.1) {
-                        segments.push(`gte(t,${lastEnd})`);
+                    if (lastEnd < videoDuration) {
+                        keepSegments.push(`gte(t,${lastEnd})`);
                     }
 
-                    const selectFilter = segments.join('+');
+                    if (keepSegments.length === 0) {
+                        return reject(new Error('No segments to keep'));
+                    }
+
+                    const selectExpr = keepSegments.join('+');
                     
                     ffmpeg(inputPath)
-                        .videoFilters(`select='${selectFilter}',setpts=N/FRAME_RATE/TB`)
-                        .audioFilters(`aselect='${selectFilter}',asetpts=N/SR/TB`)
-                        .outputOptions(['-vsync', 'vfr'])
+                        .videoFilters(`select='${selectExpr}',setpts=N/FRAME_RATE/TB`)
+                        .audioFilters(`aselect='${selectExpr}',asetpts=N/SR/TB`)
                         .output(outputPath)
                         .on('end', () => { clearTimeout(timeout); resolve(); })
                         .on('error', (error) => { clearTimeout(timeout); reject(error); })
