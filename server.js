@@ -507,7 +507,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Video processing server is running' });
 });
 
-// Remove silence parts from video
+// Remove silence parts from video with proper sync
 app.post('/remove-silence', async (req, res) => {
   try {
     const { 
@@ -522,15 +522,32 @@ app.post('/remove-silence', async (req, res) => {
     }
     await ensureTempDir();
     
-    // Download video
     const videoId = uuidv4();
     const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
     const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
+    const segmentsFile = path.join('temp', `${videoId}_segments.txt`);
     
     console.log('Downloading video from google drive:', googleDriveFileID);
     await downloadFile(inputVideoPath, googleDriveFileID);
     
-        // Step 1: Detect silence periods using silencedetect filter
+    // Get original video duration
+    console.log('Getting original video duration...');
+    let originalDuration = null;
+    try {
+      const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${inputVideoPath}"`;
+      const { stdout } = await new Promise((resolve, reject) => {
+        exec(ffprobeCommand, (error, stdout, stderr) => {
+          if (error) reject(error);
+          else resolve({ stdout, stderr });
+        });
+      });
+      originalDuration = parseFloat(stdout.trim());
+      console.log('Original video duration:', originalDuration, 'seconds');
+    } catch (durationError) {
+      console.warn('Could not get original video duration:', durationError.message);
+    }
+    
+    // Step 1: Detect silence periods using silencedetect filter
     console.log('Detecting silence periods...');
     const silenceData = await new Promise((resolve, reject) => {
       let silenceOutput = '';
@@ -653,30 +670,68 @@ app.post('/remove-silence', async (req, res) => {
         .run();
     });
     
-    // Create URL for the processed video
-    const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
-    
-    // Clean up input file (optional)
-    // fs.unlinkSync(inputVideoPath);
+    // Get processed video duration
+    console.log('Getting processed video duration...');
+    let processedDuration = null;
+    try {
+      const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputVideoPath}"`;
+      const { stdout } = await new Promise((resolve, reject) => {
+        exec(ffprobeCommand, (error, stdout, stderr) => {
+          if (error) reject(error);
+          else resolve({ stdout, stderr });
+        });
+      });
+      processedDuration = parseFloat(stdout.trim());
+      console.log('Processed video duration:', processedDuration, 'seconds');
+    } catch (durationError) {
+      console.warn('Could not get processed video duration:', durationError.message);
+    }
     
     // Calculate statistics
     const totalSilenceRemoved = silencePeriods.reduce((sum, silence) => sum + silence.duration, 0);
+    const timeSaved = originalDuration && processedDuration ? 
+      originalDuration - processedDuration : totalSilenceRemoved;
+    
+    const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
     
     res.json({
       success: true,
       videoUrl: videoUrl,
       videoPath: outputVideoPath,
       videoId: `${videoId}_output.mp4`,
+      originalDuration: originalDuration,
+      processedDuration: processedDuration,
+      timeSaved: timeSaved,
       silencePeriodsRemoved: silencePeriods.length,
       segmentsKept: segments.length,
       totalSilenceRemoved: totalSilenceRemoved,
-      silenceThreshold: silenceThreshold,
-      minSilenceDuration: minSilenceDuration
+      settings: {
+        silenceThreshold,
+        minSilenceDuration,
+        silenceDetectDuration
+      }
     });
     
   } catch (error) {
     console.error('Error removing silence:', error);
-    res.status(500).json({ error: 'Failed to remove silence', details: error.message });
+    
+    // Clean up temp files on error
+    try {
+      if (fs.existsSync(inputVideoPath)) fs.unlinkSync(inputVideoPath);
+      if (fs.existsSync(outputVideoPath)) fs.unlinkSync(outputVideoPath);
+      if (fs.existsSync(segmentsFile)) fs.unlinkSync(segmentsFile);
+    } catch (cleanupError) {
+      console.warn('Cleanup error:', cleanupError.message);
+    }
+    
+    // Send appropriate error response
+    if (error.message.includes('timeout')) {
+      res.status(408).json({ error: 'Processing timeout - video may be too large or complex', details: error.message });
+    } else if (error.message.includes('No non-silent segments')) {
+      res.status(400).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: 'Failed to remove silence', details: error.message });
+    }
   }
 });
 
