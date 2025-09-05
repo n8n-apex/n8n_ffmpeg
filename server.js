@@ -597,7 +597,7 @@ function removesilenceSimple(inputPath, outputPath) {
                     
                     // Add 0.3 sec padding to the end
                     if (lastEnd < videoDuration) {
-                        const endTime = Math.min(lastEnd + 0.3, videoDuration);
+                        const endTime = Math.min(lastEnd + 0.6, videoDuration);
                         keepSegments.push(`between(t,${lastEnd},${endTime})`);
                     }
 
