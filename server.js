@@ -579,25 +579,34 @@ function removesilenceSimple(inputPath, outputPath) {
                 })
                 .on('end', () => {
                     if (silencePeriods.length === 0) {
+                        // No silence, copy original
                         ffmpeg(inputPath).output(outputPath)
                             .on('end', () => { clearTimeout(timeout); resolve(); })
                             .on('error', reject).run();
                         return;
                     }
 
+                    // Build keep segments
                     let keepSegments = [];
                     let lastEnd = 0;
                     
-                    silencePeriods.forEach(silence => {
+                    silencePeriods.forEach((silence, index) => {
                         if (silence.start > lastEnd) {
                             keepSegments.push(`between(t,${lastEnd},${silence.start})`);
                         }
+                        
+                        // For the last silence period, keep 0.3 seconds at the end
+                        if (index === silencePeriods.length - 1) {
+                            const paddingStart = Math.max(silence.start, silence.end - 0.3);
+                            keepSegments.push(`gte(t,${paddingStart})`);
+                            return; // Don't update lastEnd for the last silence
+                        }
+                        
                         lastEnd = silence.end;
                     });
                     
-                    // Add remaining content + 0.3s padding
-                    if (lastEnd < videoDuration) {
-                        keepSegments.push(`between(t,${lastEnd},${videoDuration})`);
+                    if (keepSegments.length === 0) {
+                        return reject(new Error('No segments to keep'));
                     }
 
                     const selectExpr = keepSegments.join('+');
@@ -605,7 +614,6 @@ function removesilenceSimple(inputPath, outputPath) {
                     ffmpeg(inputPath)
                         .videoFilters(`select='${selectExpr}',setpts=N/FRAME_RATE/TB`)
                         .audioFilters(`aselect='${selectExpr}',asetpts=N/SR/TB`)
-                        .outputOptions(['-t', `+0.3`]) // Add 0.3s padding to output
                         .output(outputPath)
                         .on('end', () => { clearTimeout(timeout); resolve(); })
                         .on('error', (error) => { clearTimeout(timeout); reject(error); })
