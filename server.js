@@ -545,21 +545,28 @@ app.post('/remove-silence', async (req, res) => {
     }
 });
 
-// Simplified single-pass silence removal
+// Fixed version that removes video segments during silence
 function removesilenceSimple(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
             reject(new Error('Processing timeout'));
-        }, 540000); // 9 minutes
+        }, 540000);
 
+        // Use silencedetect to find silence, then remove those segments from both audio and video
         ffmpeg(inputPath)
-            .audioFilters('silenceremove=stop_periods=-1:stop_duration=0.5:stop_threshold=-30dB')
+            .complexFilter([
+                // Detect silence and create segments
+                '[0:a]silencedetect=noise=-25dB:duration=0.3[silence]',
+                // Remove silence from both video and audio
+                '[0:v][0:a]silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-25dB:window=0.02[v][a]'
+            ])
+            .map('[v]')
+            .map('[a]')
             .videoCodec('libx264')
             .audioCodec('aac')
             .outputOptions([
                 '-crf', '28',
-                '-preset', 'ultrafast',
-                '-movflags', '+faststart'
+                '-preset', 'fast'
             ])
             .output(outputPath)
             .on('end', () => {
