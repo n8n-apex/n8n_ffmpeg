@@ -507,74 +507,80 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Video processing server is running' });
 });
 
-// Extract audio from video
-app.post('/extract-audio', async (req, res) => {
- try {
-   const { googleDriveFileID } = req.body;
-   
-   if (!googleDriveFileID) {
-     return res.status(400).json({ error: 'Video ID is required' });
-   }
-   await ensureTempDir();
-   
-   // Download video
-   const videoId = uuidv4();
-   const videoPath = path.join('temp', `${videoId}_input.mp4`);
-   const audioPath = path.join('temp', `${videoId}_audio.wav`);
-   
-   console.log('Downloading video from google drive:', googleDriveFileID);
-   await downloadFile(videoPath, googleDriveFileID);
-   
-   // Store video path for later use
-   currentVideoPath = videoPath;
-   
-   // Get video duration using FFprobe
-   console.log('Getting video duration...');
-   let videoDuration = null;
-   try {
-     const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${videoPath}"`;
-     const { stdout } = await new Promise((resolve, reject) => {
-       exec(ffprobeCommand, (error, stdout, stderr) => {
-         if (error) reject(error);
-         else resolve({ stdout, stderr });
-       });
-     });
-     videoDuration = parseFloat(stdout.trim());
-     console.log('Video duration:', videoDuration, 'seconds');
-   } catch (durationError) {
-     console.warn('Could not get video duration:', durationError.message);
-   }
-   
-   // Extract audio
-   console.log('Extracting audio...');
-   await new Promise((resolve, reject) => {
-     ffmpeg(videoPath)
-       .output(audioPath)
-       .audioCodec('pcm_s16le')
-       .audioFrequency(16000)
-       .audioChannels(1)
-       .on('end', resolve)
-       .on('error', reject)
-       .run();
-   });
-   
-   // Upload audio to a temporary hosting service or return local path
-   // For now, we'll assume you have a way to host the audio file
-   const audioUrl = `http://localhost:${PORT}/temp-audio/${path.basename(audioPath)}`;
-   
-   res.json({
-     success: true,
-     audioUrl: audioUrl,
-     audioPath: audioPath,
-     videoPath: videoPath,
-     videoId: `${videoId}_input.mp4`,
-     videoDuration: videoDuration
-   });
-   
- } catch (error) {
-   console.error('Error extracting audio:', error);
-   res.status(500).json({ error: 'Failed to extract audio', details: error.message });
- }
+// Remove silence parts from video
+app.post('/remove-silence', async (req, res) => {
+  try {
+    const { googleDriveFileID, silenceThreshold = '-30dB', minSilenceDuration = '0.5' } = req.body;
+    
+    if (!googleDriveFileID) {
+      return res.status(400).json({ error: 'Video ID is required' });
+    }
+    await ensureTempDir();
+    
+    // Download video
+    const videoId = uuidv4();
+    const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
+    const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
+    
+    console.log('Downloading video from google drive:', googleDriveFileID);
+    await downloadFile(inputVideoPath, googleDriveFileID);
+    
+    // Remove silence from video
+    console.log('Removing silence from video...');
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputVideoPath)
+        .output(outputVideoPath)
+        // Audio filter to remove silence from start and end
+        .audioFilters([
+          `silenceremove=start_periods=1:start_duration=${minSilenceDuration}:start_threshold=${silenceThreshold}:detection=peak`,
+          `areverse`,
+          `silenceremove=start_periods=1:start_duration=${minSilenceDuration}:start_threshold=${silenceThreshold}:detection=peak`,
+          `areverse`
+        ])
+        // Video codec settings
+        .videoCodec('libx264')
+        .audioCodec('aac')
+        // Maintain video quality
+        .addOptions(['-crf', '23'])
+        .on('start', (commandLine) => {
+          console.log('FFmpeg command: ' + commandLine);
+        })
+        .on('progress', (progress) => {
+          console.log('Processing: ' + Math.round(progress.percent) + '% done');
+        })
+        .on('end', () => {
+          console.log('Silence removal completed');
+          resolve();
+        })
+        .on('error', (error) => {
+          console.error('Error removing silence:', error);
+          reject(error);
+        })
+        .run();
+    });
+    
+    // Create URL for the processed video
+    const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
+    
+    // Clean up input file (optional)
+    // fs.unlinkSync(inputVideoPath);
+    
+    res.json({
+      success: true,
+      videoUrl: videoUrl,
+      videoPath: outputVideoPath,
+      videoId: `${videoId}_output.mp4`,
+      originalDuration: originalDuration,
+      processedDuration: processedDuration,
+      timeSaved: timeSaved,
+      silenceThreshold: silenceThreshold,
+      minSilenceDuration: minSilenceDuration
+    });
+    
+  } catch (error) {
+    console.error('Error removing silence:', error);
+    res.status(500).json({ error: 'Failed to remove silence', details: error.message });
+  }
 });
 
 // Serve temporary audio files
