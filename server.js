@@ -516,8 +516,8 @@ app.post('/remove-silence', async (req, res) => {
   try {
     const { 
       googleDriveFileID, 
-      silenceThreshold = '-15dB',
-      minSilenceDuration = '0.3'
+      silenceThreshold = '-10dB',
+      minSilenceDuration = '0.2'
     } = req.body;
     
     if (!googleDriveFileID) {
