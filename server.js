@@ -508,14 +508,13 @@ app.get('/health', (req, res) => {
 });
 
 // Remove silence parts from video with proper sync
+// Ultra-simple aggressive silence removal for testing
 app.post('/remove-silence', async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  
   try {
-    const { 
-      googleDriveFileID, 
-      silenceThreshold = '-40dB', 
-      minSilenceDuration = '0.2',
-      silenceDetectDuration = '0.1'
-    } = req.body;
+    const { googleDriveFileID } = req.body;
     
     if (!googleDriveFileID) {
       return res.status(400).json({ error: 'Video ID is required' });
@@ -525,172 +524,38 @@ app.post('/remove-silence', async (req, res) => {
     const videoId = uuidv4();
     const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
     const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
-    const segmentsFile = path.join('temp', `${videoId}_segments.txt`);
     
-    console.log('Downloading video from google drive:', googleDriveFileID);
+    console.log('Downloading video...');
     await downloadFile(inputVideoPath, googleDriveFileID);
     
-    // Get original video duration
-    console.log('Getting original video duration...');
-    let originalDuration = null;
-    try {
-      const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${inputVideoPath}"`;
-      const { stdout } = await new Promise((resolve, reject) => {
-        exec(ffprobeCommand, (error, stdout, stderr) => {
-          if (error) reject(error);
-          else resolve({ stdout, stderr });
-        });
-      });
-      originalDuration = parseFloat(stdout.trim());
-      console.log('Original video duration:', originalDuration, 'seconds');
-    } catch (durationError) {
-      console.warn('Could not get original video duration:', durationError.message);
-    }
-    
-    // Step 1: Detect silence periods using silencedetect filter
-    console.log('Detecting silence periods...');
-    const silenceData = await new Promise((resolve, reject) => {
-      let silenceOutput = '';
-      
-      ffmpeg(inputVideoPath)
-        .audioFilters(`silencedetect=noise=${silenceThreshold}:duration=${silenceDetectDuration}`)
-        .format('null')
-        .output('-')
-        .on('start', (commandLine) => {
-          console.log('Silence detection command: ' + commandLine);
-        })
-        .on('stderr', (stderrLine) => {
-          silenceOutput += stderrLine + '\n';
-        })
-        .on('end', () => {
-          resolve(silenceOutput);
-        })
-        .on('error', reject)
-        .run();
-    });
-    
-    // Step 2: Parse silence periods and create non-silent segments
-    console.log('Parsing silence data...');
-    const silenceRegex = /silence_start: ([\d.]+).*?silence_end: ([\d.]+)/g;
-    const silencePeriods = [];
-    let match;
-    
-    while ((match = silenceRegex.exec(silenceData)) !== null) {
-      const start = parseFloat(match[1]);
-      const end = parseFloat(match[2]);
-      const duration = end - start;
-      
-      // Only consider silences longer than minimum duration
-      if (duration >= parseFloat(minSilenceDuration)) {
-        silencePeriods.push({ start, end, duration });
-      }
-    }
-    
-    console.log(`Found ${silencePeriods.length} silence periods to remove`);
-    
-    // Step 3: Create segments of non-silent parts
-    const segments = [];
-    let currentStart = 0;
-    
-    for (const silence of silencePeriods) {
-      // Add segment before this silence
-      if (silence.start > currentStart) {
-        segments.push({
-          start: currentStart,
-          end: silence.start,
-          duration: silence.start - currentStart
-        });
-      }
-      currentStart = silence.end;
-    }
-    
-    // Add final segment if there's content after the last silence
-    if (originalDuration && currentStart < originalDuration) {
-      segments.push({
-        start: currentStart,
-        end: originalDuration,
-        duration: originalDuration - currentStart
-      });
-    }
-    
-    console.log(`Created ${segments.length} segments to keep`);
-    
-    if (segments.length === 0) {
-      return res.status(400).json({ error: 'No non-silent segments found' });
-    }
-    
-    // Step 4: Create filter complex for concatenation
-    let filterComplex = '';
-    let videoInputs = '';
-    let audioInputs = '';
-    
-    segments.forEach((segment, index) => {
-      // Create separate video and audio streams for each segment
-      filterComplex += `[0:v]trim=start=${segment.start}:end=${segment.end},setpts=PTS-STARTPTS[v${index}];`;
-      filterComplex += `[0:a]atrim=start=${segment.start}:end=${segment.end},asetpts=PTS-STARTPTS[a${index}];`;
-      
-      videoInputs += `[v${index}]`;
-      audioInputs += `[a${index}]`;
-    });
-    
-    // Concatenate all segments
-    filterComplex += `${videoInputs}concat=n=${segments.length}:v=1:a=0[outv];`;
-    filterComplex += `${audioInputs}concat=n=${segments.length}:v=0:a=1[outa]`;
-    
-    // Step 5: Process video with silence removal
-    console.log('Processing video with silence removal...');
+    console.log('Applying aggressive silence removal...');
     await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Processing timeout')), 240000);
+      
       ffmpeg(inputVideoPath)
-        .complexFilter(filterComplex)
-        .outputOptions([
-          '-map', '[outv]',
-          '-map', '[outa]',
-          '-c:v', 'libx264',
-          '-c:a', 'aac',
-          '-crf', '23',
-          '-preset', 'medium'
+        .audioFilters([
+          // Very aggressive settings for noisy environments
+          'silenceremove=stop_periods=-1:stop_duration=0.2:stop_threshold=-15dB:detection=peak',
+          'silenceremove=start_periods=1:start_duration=0.2:start_threshold=-15dB:detection=peak'
         ])
+        .videoCodec('libx264')
+        .audioCodec('aac')
+        .outputOptions(['-crf', '28', '-preset', 'fast'])
         .output(outputVideoPath)
-        .on('start', (commandLine) => {
-          console.log('Processing command: ' + commandLine);
-        })
+        .on('start', (cmd) => console.log('Command:', cmd))
         .on('progress', (progress) => {
-          if (progress.percent) {
-            console.log('Processing: ' + Math.round(progress.percent) + '% done');
-          }
+          if (progress.percent) console.log('Progress:', Math.round(progress.percent) + '%');
         })
         .on('end', () => {
-          console.log('Video processing completed');
+          clearTimeout(timeout);
           resolve();
         })
         .on('error', (error) => {
-          console.error('Error processing video:', error);
+          clearTimeout(timeout);
           reject(error);
         })
         .run();
     });
-    
-    // Get processed video duration
-    console.log('Getting processed video duration...');
-    let processedDuration = null;
-    try {
-      const ffprobeCommand = `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputVideoPath}"`;
-      const { stdout } = await new Promise((resolve, reject) => {
-        exec(ffprobeCommand, (error, stdout, stderr) => {
-          if (error) reject(error);
-          else resolve({ stdout, stderr });
-        });
-      });
-      processedDuration = parseFloat(stdout.trim());
-      console.log('Processed video duration:', processedDuration, 'seconds');
-    } catch (durationError) {
-      console.warn('Could not get processed video duration:', durationError.message);
-    }
-    
-    // Calculate statistics
-    const totalSilenceRemoved = silencePeriods.reduce((sum, silence) => sum + silence.duration, 0);
-    const timeSaved = originalDuration && processedDuration ? 
-      originalDuration - processedDuration : totalSilenceRemoved;
     
     const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
     
@@ -698,40 +563,13 @@ app.post('/remove-silence', async (req, res) => {
       success: true,
       videoUrl: videoUrl,
       videoPath: outputVideoPath,
-      videoId: `${videoId}_output.mp4`,
-      originalDuration: originalDuration,
-      processedDuration: processedDuration,
-      timeSaved: timeSaved,
-      silencePeriodsRemoved: silencePeriods.length,
-      segmentsKept: segments.length,
-      totalSilenceRemoved: totalSilenceRemoved,
-      settings: {
-        silenceThreshold,
-        minSilenceDuration,
-        silenceDetectDuration
-      }
+      message: 'Used aggressive silence removal (-15dB threshold)',
+      method: 'aggressive_simple'
     });
     
   } catch (error) {
-    console.error('Error removing silence:', error);
-    
-    // Clean up temp files on error
-    try {
-      if (fs.existsSync(inputVideoPath)) fs.unlinkSync(inputVideoPath);
-      if (fs.existsSync(outputVideoPath)) fs.unlinkSync(outputVideoPath);
-      if (fs.existsSync(segmentsFile)) fs.unlinkSync(segmentsFile);
-    } catch (cleanupError) {
-      console.warn('Cleanup error:', cleanupError.message);
-    }
-    
-    // Send appropriate error response
-    if (error.message.includes('timeout')) {
-      res.status(408).json({ error: 'Processing timeout - video may be too large or complex', details: error.message });
-    } else if (error.message.includes('No non-silent segments')) {
-      res.status(400).json({ error: error.message });
-    } else {
-      res.status(500).json({ error: 'Failed to remove silence', details: error.message });
-    }
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Processing failed', details: error.message });
   }
 });
 
