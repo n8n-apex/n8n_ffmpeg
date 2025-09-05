@@ -595,10 +595,10 @@ function removesilenceSimple(inputPath, outputPath) {
                             keepSegments.push(`between(t,${lastEnd},${silence.start})`);
                         }
                         
-                        // For the last silence period, keep 0.3 seconds at the end
+                        // For the last silence period, keep 0.3 seconds from its start
                         if (index === silencePeriods.length - 1) {
-                            const paddingStart = Math.max(silence.start + 0.3, silence.end);
-                            keepSegments.push(`gte(t,${paddingStart})`);
+                            const paddingEnd = silence.start + 0.3;
+                            keepSegments.push(`between(t,${silence.start},${paddingEnd})`);
                             return; // Don't update lastEnd for the last silence
                         }
                         
