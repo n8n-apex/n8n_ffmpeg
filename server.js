@@ -507,13 +507,6 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Video processing server is running' });
 });
 
-// server.js - Complete silence removal solutions
-
-const ffmpeg = require('fluent-ffmpeg');
-const path = require('path');
-const fs = require('fs').promises;
-const { v4: uuidv4 } = require('uuid');
-
 // Solution 1: Two-pass approach with silence detection and segment cutting
 app.post('/remove-silence-complete', async (req, res) => {
     req.setTimeout(300000);
