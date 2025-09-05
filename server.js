@@ -570,8 +570,6 @@ app.post('/remove-silence', async (req, res) => {
       videoUrl: videoUrl,
       videoPath: outputVideoPath,
       videoId: `${videoId}_output.mp4`,
-      processedDuration: processedDuration,
-      timeSaved: timeSaved,
       silenceThreshold: silenceThreshold,
       minSilenceDuration: minSilenceDuration
     });
