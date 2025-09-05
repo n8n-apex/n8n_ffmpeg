@@ -545,30 +545,78 @@ app.post('/remove-silence', async (req, res) => {
     }
 });
 
-// Working solution - audio-only silence removal that syncs video
+// Detect silence and cut video segments
 function removesilenceSimple(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
             reject(new Error('Processing timeout'));
         }, 540000);
 
-        ffmpeg(inputPath)
-            .audioFilters([
-                'silenceremove=start_periods=1:start_duration=0:start_threshold=-25dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-25dB'
-            ])
-            .videoCodec('copy') // Copy video without re-encoding
-            .audioCodec('aac')
-            .outputOptions(['-avoid_negative_ts', 'make_zero'])
-            .output(outputPath)
-            .on('end', () => {
-                clearTimeout(timeout);
-                resolve();
-            })
-            .on('error', (error) => {
-                clearTimeout(timeout);
-                reject(error);
-            })
-            .run();
+        // First pass: detect silence periods
+        let silencePeriods = [];
+        let videoDuration = 0;
+
+        ffmpeg.ffprobe(inputPath, (err, metadata) => {
+            if (err) return reject(err);
+            
+            videoDuration = metadata.format.duration;
+            
+            ffmpeg(inputPath)
+                .audioFilters('silencedetect=noise=-25dB:duration=0.3')
+                .format('null')
+                .output('-')
+                .on('stderr', (line) => {
+                    const startMatch = line.match(/silence_start: ([\d.]+)/);
+                    const endMatch = line.match(/silence_end: ([\d.]+)/);
+                    
+                    if (startMatch && endMatch) {
+                        silencePeriods.push({
+                            start: parseFloat(startMatch[1]),
+                            end: parseFloat(endMatch[1])
+                        });
+                    }
+                })
+                .on('end', () => {
+                    // Create filter to remove silence segments
+                    if (silencePeriods.length === 0) {
+                        // No silence found, just copy
+                        ffmpeg(inputPath)
+                            .output(outputPath)
+                            .on('end', () => { clearTimeout(timeout); resolve(); })
+                            .on('error', reject)
+                            .run();
+                        return;
+                    }
+
+                    // Build segments to keep
+                    let segments = [];
+                    let lastEnd = 0;
+                    
+                    silencePeriods.forEach(silence => {
+                        if (silence.start > lastEnd + 0.1) {
+                            segments.push(`between(t,${lastEnd},${silence.start})`);
+                        }
+                        lastEnd = silence.end;
+                    });
+                    
+                    if (lastEnd < videoDuration - 0.1) {
+                        segments.push(`gte(t,${lastEnd})`);
+                    }
+
+                    const selectFilter = segments.join('+');
+                    
+                    ffmpeg(inputPath)
+                        .videoFilters(`select='${selectFilter}',setpts=N/FRAME_RATE/TB`)
+                        .audioFilters(`aselect='${selectFilter}',asetpts=N/SR/TB`)
+                        .outputOptions(['-vsync', 'vfr'])
+                        .output(outputPath)
+                        .on('end', () => { clearTimeout(timeout); resolve(); })
+                        .on('error', (error) => { clearTimeout(timeout); reject(error); })
+                        .run();
+                })
+                .on('error', reject)
+                .run();
+        });
     });
 }
 
