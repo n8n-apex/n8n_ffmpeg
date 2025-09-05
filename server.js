@@ -507,10 +507,9 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Video processing server is running' });
 });
 
-// Solution 1: Two-pass approach with silence detection and segment cutting
+// Fixed version with better error handling and resource management
 app.post('/remove-silence', async (req, res) => {
-    req.setTimeout(300000);
-    res.setTimeout(300000);
+    const cleanup = [];
     
     try {
         const { googleDriveFileID } = req.body;
@@ -522,11 +521,12 @@ app.post('/remove-silence', async (req, res) => {
         const videoId = uuidv4();
         const inputVideoPath = path.join('temp', `${videoId}_input.mp4`);
         const outputVideoPath = path.join('temp', `${videoId}_output.mp4`);
+        
+        cleanup.push(inputVideoPath, outputVideoPath);
 
         console.log('Downloading video...');
         await downloadFile(inputVideoPath, googleDriveFileID);
 
-        // Step 1: Detect silence periods and get segments to keep
         console.log('Analyzing audio for silence periods...');
         const segments = await detectNonSilentSegments(inputVideoPath);
         
@@ -535,46 +535,58 @@ app.post('/remove-silence', async (req, res) => {
         }
 
         console.log(`Found ${segments.length} non-silent segments`);
-
-        // Step 2: Create concatenated video from non-silent segments
         await createConcatenatedVideo(inputVideoPath, outputVideoPath, segments);
 
         const videoUrl = `http://localhost:${PORT}/temp-video/${path.basename(outputVideoPath)}`;
         res.json({ 
             success: true, 
             videoUrl: videoUrl, 
+            videoId: `${videoId}_output.mp4`,
             message: `Removed silence - ${segments.length} segments processed`,
             method: 'complete_removal'
         });
 
     } catch (error) {
         console.error('Error:', error);
-        res.status(500).json({ error: 'Processing failed', details: error.message });
+        
+        // Cleanup temp files
+        cleanup.forEach(file => {
+            if (fs.existsSync(file)) {
+                fs.unlinkSync(file);
+            }
+        });
+        
+        res.status(500).json({ 
+            error: 'Processing failed', 
+            details: error.message 
+        });
     }
 });
 
-// Helper function to detect non-silent segments
-function detectNonSilentSegments(inputPath, silenceThreshold = -15, minSilenceDuration = 0.2) {
+function detectNonSilentSegments(inputPath, silenceThreshold = -30, minSilenceDuration = 0.5) {
     return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('Silence detection timeout'));
+        }, 120000);
+
         let silencePeriods = [];
         let currentSilenceStart = null;
         let videoDuration = 0;
 
         ffmpeg.ffprobe(inputPath, (err, metadata) => {
             if (err) {
+                clearTimeout(timeout);
                 reject(err);
                 return;
             }
 
             videoDuration = metadata.format.duration;
             
-            // Detect silence using silencedetect filter
             ffmpeg(inputPath)
                 .audioFilters([`silencedetect=noise=${silenceThreshold}dB:duration=${minSilenceDuration}`])
                 .format('null')
                 .output('-')
                 .on('stderr', (stderrLine) => {
-                    // Parse silence detection output
                     if (stderrLine.includes('silence_start:')) {
                         const match = stderrLine.match(/silence_start: ([\d.]+)/);
                         if (match) {
@@ -593,12 +605,13 @@ function detectNonSilentSegments(inputPath, silenceThreshold = -15, minSilenceDu
                     }
                 })
                 .on('end', () => {
-                    // Convert silence periods to non-silent segments
+                    clearTimeout(timeout);
+                    
                     const segments = [];
                     let lastEnd = 0;
 
                     silencePeriods.forEach(silence => {
-                        if (silence.start > lastEnd + 0.1) { // 0.1s minimum segment
+                        if (silence.start > lastEnd + 0.2) {
                             segments.push({
                                 start: lastEnd,
                                 duration: silence.start - lastEnd
@@ -607,8 +620,7 @@ function detectNonSilentSegments(inputPath, silenceThreshold = -15, minSilenceDu
                         lastEnd = silence.end;
                     });
 
-                    // Add final segment if there's content after last silence
-                    if (lastEnd < videoDuration - 0.1) {
+                    if (lastEnd < videoDuration - 0.2) {
                         segments.push({
                             start: lastEnd,
                             duration: videoDuration - lastEnd
@@ -617,26 +629,33 @@ function detectNonSilentSegments(inputPath, silenceThreshold = -15, minSilenceDu
 
                     resolve(segments);
                 })
-                .on('error', reject)
+                .on('error', (error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                })
                 .run();
         });
     });
 }
 
-// Helper function to create concatenated video from segments
 function createConcatenatedVideo(inputPath, outputPath, segments) {
     return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Processing timeout')), 240000);
+        const timeout = setTimeout(() => {
+            reject(new Error('Video processing timeout'));
+        }, 180000);
         
         if (segments.length === 1) {
-            // Single segment - just extract that portion
             const segment = segments[0];
             ffmpeg(inputPath)
                 .seekInput(segment.start)
                 .duration(segment.duration)
                 .videoCodec('libx264')
                 .audioCodec('aac')
-                .outputOptions(['-crf', '28', '-preset', 'fast'])
+                .outputOptions([
+                    '-crf', '23',
+                    '-preset', 'medium',
+                    '-movflags', '+faststart'
+                ])
                 .output(outputPath)
                 .on('end', () => {
                     clearTimeout(timeout);
@@ -648,52 +667,62 @@ function createConcatenatedVideo(inputPath, outputPath, segments) {
                 })
                 .run();
         } else {
-            // Multiple segments - use filter_complex for concatenation
-            const filterInputs = [];
-            const filterParts = [];
+            // Use concat demuxer for better performance
+            const listFile = path.join('temp', `${path.basename(outputPath)}_list.txt`);
+            const segmentFiles = [];
             
-            segments.forEach((segment, index) => {
-                filterInputs.push(
-                    `-ss ${segment.start}`,
-                    `-t ${segment.duration}`,
-                    `-i "${inputPath}"`
-                );
-                filterParts.push(`[${index}:v][${index}:a]`);
+            // Create individual segment files first
+            const createSegments = segments.map((segment, index) => {
+                return new Promise((segResolve, segReject) => {
+                    const segmentPath = path.join('temp', `segment_${index}.mp4`);
+                    segmentFiles.push(segmentPath);
+                    
+                    ffmpeg(inputPath)
+                        .seekInput(segment.start)
+                        .duration(segment.duration)
+                        .videoCodec('copy')
+                        .audioCodec('copy')
+                        .output(segmentPath)
+                        .on('end', segResolve)
+                        .on('error', segReject)
+                        .run();
+                });
             });
 
-            const filterComplex = filterParts.join('') + 
-                `concat=n=${segments.length}:v=1:a=1[outv][outa]`;
-
-            // Build command manually for complex concatenation
-            const command = [
-                'ffmpeg',
-                ...filterInputs.join(' ').split(' '),
-                '-filter_complex', filterComplex,
-                '-map', '[outv]',
-                '-map', '[outa]',
-                '-c:v', 'libx264',
-                '-c:a', 'aac',
-                '-crf', '28',
-                '-preset', 'fast',
-                outputPath
-            ].filter(arg => arg.trim() !== '');
-
-            const { spawn } = require('child_process');
-            const ffmpegProcess = spawn(command[0], command.slice(1));
-            
-            ffmpegProcess.on('close', (code) => {
-                clearTimeout(timeout);
-                if (code === 0) {
-                    resolve();
-                } else {
-                    reject(new Error(`FFmpeg exited with code ${code}`));
-                }
-            });
-
-            ffmpegProcess.on('error', (error) => {
-                clearTimeout(timeout);
-                reject(error);
-            });
+            Promise.all(createSegments)
+                .then(() => {
+                    // Create concat list file
+                    const listContent = segmentFiles.map(f => `file '${f}'`).join('\n');
+                    fs.writeFileSync(listFile, listContent);
+                    
+                    // Concatenate segments
+                    ffmpeg()
+                        .input(listFile)
+                        .inputOptions(['-f', 'concat', '-safe', '0'])
+                        .videoCodec('libx264')
+                        .audioCodec('aac')
+                        .outputOptions(['-crf', '23', '-preset', 'medium'])
+                        .output(outputPath)
+                        .on('end', () => {
+                            clearTimeout(timeout);
+                            // Cleanup segment files
+                            segmentFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
+                            fs.existsSync(listFile) && fs.unlinkSync(listFile);
+                            resolve();
+                        })
+                        .on('error', (error) => {
+                            clearTimeout(timeout);
+                            segmentFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
+                            fs.existsSync(listFile) && fs.unlinkSync(listFile);
+                            reject(error);
+                        })
+                        .run();
+                })
+                .catch((error) => {
+                    clearTimeout(timeout);
+                    segmentFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
+                    reject(error);
+                });
         }
     });
 }
