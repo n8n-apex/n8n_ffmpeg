@@ -670,11 +670,6 @@ app.post('/remove-silence', async (req, res) => {
       silencePeriodsRemoved: silencePeriods.length,
       segmentsKept: segments.length,
       totalSilenceRemoved: totalSilenceRemoved,
-      settings: {
-        silenceThreshold,
-        minSilenceDuration,
-        silenceDetectDuration
-      }
       silenceThreshold: silenceThreshold,
       minSilenceDuration: minSilenceDuration
     });
