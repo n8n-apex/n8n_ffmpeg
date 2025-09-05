@@ -562,6 +562,7 @@ app.post('/remove-silence', async (req, res) => {
     res.json({
       success: true,
       videoUrl: videoUrl,
+      videoId: `${videoId}_output.mp4`,
       videoPath: outputVideoPath,
       message: 'Used aggressive silence removal (-15dB threshold)',
       method: 'aggressive_simple'
