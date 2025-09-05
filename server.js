@@ -595,15 +595,10 @@ function removesilenceSimple(inputPath, outputPath) {
                         lastEnd = silence.end;
                     });
                     
-                    // Add 0.3 sec padding to the end
-                    if (lastEnd < videoDuration) {
-                        const endTime = Math.min(lastEnd + 0.6, videoDuration);
-                        keepSegments.push(`between(t,${lastEnd},${endTime})`);
-                    }
-
-                    if (keepSegments.length === 0) {
-                        return reject(new Error('No segments to keep'));
-                    }
+                    // Always add final segment with 0.3s padding
+                    const finalEnd = Math.min(videoDuration, videoDuration);
+                    const paddingStart = Math.max(lastEnd, finalEnd - 0.3);
+                    keepSegments.push(`gte(t,${paddingStart})`);
 
                     const selectExpr = keepSegments.join('+');
                     
@@ -620,6 +615,7 @@ function removesilenceSimple(inputPath, outputPath) {
         });
     });
 }
+
 // Serve temporary audio files
 app.get('/temp-audio/:filename', (req, res) => {
   const filename = req.params.filename;
