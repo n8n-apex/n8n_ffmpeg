@@ -587,27 +587,23 @@ function removesilenceSimple(inputPath, outputPath) {
                         return;
                     }
 
-                    // Build keep segments with padding
+                    // Build keep segments with padding at silence start
                     let keepSegments = [];
                     let lastEnd = 0;
                     const padding = 0.15;
                     
                     silencePeriods.forEach(silence => {
                         if (silence.start > lastEnd) {
-                            const segmentStart = lastEnd;
-                            const segmentEnd = Math.max(segmentStart, silence.start - padding);
-                            
-                            if (segmentEnd > segmentStart) {
-                                keepSegments.push(`between(t,${segmentStart},${segmentEnd})`);
-                            }
+                            const segmentEnd = silence.start + padding;
+                            keepSegments.push(`between(t,${lastEnd},${segmentEnd})`);
                         }
-                        lastEnd = silence.end + padding;
+                        lastEnd = silence.end;
                     });
                     
                     if (lastEnd < videoDuration) {
                         keepSegments.push(`gte(t,${lastEnd})`);
                     }
-
+                    
                     if (keepSegments.length === 0) {
                         return reject(new Error('No segments to keep'));
                     }
