@@ -535,6 +535,7 @@ app.post('/remove-silence', async (req, res) => {
         res.json({ 
             success: true, 
             videoUrl: videoUrl, 
+            videoPath: outputVideoPath,
             videoId: `${videoId}_output.mp4`,
             message: 'Silence removed successfully'
         });
