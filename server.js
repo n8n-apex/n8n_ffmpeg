@@ -559,7 +559,7 @@ function removesilenceSimple(inputPath, outputPath) {
             videoDuration = metadata.format.duration;
             
             ffmpeg(inputPath)
-                .audioFilters('silencedetect=noise=-25dB:duration=0.3')
+                .audioFilters('silencedetect=noise=-15dB:duration=0.3')
                 .format('null')
                 .output('-')
                 .on('stderr', (line) => {
