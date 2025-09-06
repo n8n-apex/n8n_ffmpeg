@@ -653,6 +653,8 @@ app.get('/temp-video/:filename', (req, res) => {
 app.post('/process-video', async (req, res) => {
   try {
     const { videoPath, filterComplex } = req.body;
+
+    currentVideoPath = videoPath;
     
     if (!currentVideoPath) {
       return res.status(400).json({ error: 'No video file available for processing' });
