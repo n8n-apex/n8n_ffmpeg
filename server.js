@@ -124,7 +124,7 @@ app.post('/merge-thumbnail-video', async (req, res) => {
       '-c:v', 'libx264',
       '-c:a', 'aac',
       '-pix_fmt', 'yuv420p',
-      '-preset', 'medium', // Better quality than 'fast'
+      '-preset', 'slow', // Better quality than 'fast'
       '-crf', '18', // High quality (lower = better, range: 0-51)
       '-profile:v', 'high', // H.264 high profile for better compression
       '-level', '4.0', // H.264 level
@@ -345,7 +345,7 @@ const compressVideo = (inputPath, outputPath, options = {}) => {
   return new Promise((resolve, reject) => {
     const {
       crf = 23,
-      preset = 'medium',
+      preset = 'slow',
       maxrate = '3M',
       bufsize = '6M',
       audioBitrate = '96k',
@@ -697,7 +697,7 @@ app.post('/process-video', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset medium',
+          '-preset slow',
           '-crf 23',
           '-threads 1',
           '-avoid_negative_ts make_zero'  // Helps with timing issues
@@ -930,7 +930,7 @@ app.post('/add-music-subtitles', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset medium',
+          '-preset slow',
           '-crf 23',
           '-threads 1',
           '-avoid_negative_ts make_zero',
