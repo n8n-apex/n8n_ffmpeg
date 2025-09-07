@@ -697,7 +697,7 @@ app.post('/process-video', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset veryfast',
+          '-preset medium',
           '-crf 23',
           '-threads 1',
           '-avoid_negative_ts make_zero'  // Helps with timing issues
@@ -930,7 +930,7 @@ app.post('/add-music-subtitles', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset veryfast',
+          '-preset medium',
           '-crf 23',
           '-threads 1',
           '-avoid_negative_ts make_zero',
