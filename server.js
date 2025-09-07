@@ -559,7 +559,7 @@ function removesilenceSimple(inputPath, outputPath) {
             videoDuration = metadata.format.duration;
             
             ffmpeg(inputPath)
-                .audioFilters('silencedetect=noise=-25dB:duration=0.5')
+                .audioFilters('silencedetect=noise=-25dB:duration=0.3')
                 .format('null')
                 .output('-')
                 .on('stderr', (line) => {
@@ -590,19 +590,25 @@ function removesilenceSimple(inputPath, outputPath) {
                     // Build keep segments with padding at silence start
                     let keepSegments = [];
                     let lastEnd = 0;
-                    const padding = 0.25;
+                    const padding = 0.20;
                     
-                    silencePeriods.forEach(silence => {
+                    silencePeriods.forEach((silence, index) => {
                         if (silence.start > lastEnd) {
                             const segmentEnd = silence.start + padding;
                             keepSegments.push(`between(t,${lastEnd},${segmentEnd})`);
                         }
+                        
+                        // For last silence period, add 0.2 sec padding before video ends
+                        if (index === silencePeriods.length - 1) {
+                            const finalStart = silence.start + 0.25;
+                            if (finalStart < videoDuration) {
+                                keepSegments.push(`between(t,${finalStart},${videoDuration})`);
+                            }
+                            return;
+                        }
+                        
                         lastEnd = silence.end;
                     });
-                    
-                    if (lastEnd < videoDuration) {
-                        keepSegments.push(`gte(t,${lastEnd})`);
-                    }
                     
                     if (keepSegments.length === 0) {
                         return reject(new Error('No segments to keep'));
