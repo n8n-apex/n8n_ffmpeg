@@ -930,7 +930,7 @@ app.post('/add-music-subtitles', async (req, res) => {
         .videoCodec('libx264')
         .audioCodec('aac')
         .outputOptions([
-          '-preset fast',
+          '-preset veryfast',
           '-crf 23',
           '-threads 1',
           '-avoid_negative_ts make_zero',
