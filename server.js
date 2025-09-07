@@ -598,13 +598,11 @@ function removesilenceSimple(inputPath, outputPath) {
                             keepSegments.push(`between(t,${lastEnd},${segmentEnd})`);
                         }
                         
-                        // For last silence period, add 0.2 sec padding before video ends
+                        // For the last silence period, keep 0.3 seconds from its start
                         if (index === silencePeriods.length - 1) {
-                            const finalStart = silence.start + 0.20;
-                            if (finalStart < videoDuration) {
-                                keepSegments.push(`between(t,${finalStart},${videoDuration})`);
-                            }
-                            return;
+                            const paddingEnd = silence.start + 0.5;
+                            keepSegments.push(`between(t,${silence.start},${paddingEnd})`);
+                            return; // Don't update lastEnd for the last silence
                         }
                         
                         lastEnd = silence.end;
