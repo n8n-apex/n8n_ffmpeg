@@ -1034,10 +1034,8 @@ app.post('/cleanup', async (req, res) => {
       const filePath = path.join(tempDir, file);
       const stats = await fs.stat(filePath);
       
-      if (now - stats.mtime.getTime() > oneHour) {
-        await fs.unlink(filePath);
-        console.log('Cleaned up old file:', filePath);
-      }
+      await fs.unlink(filePath);
+      console.log('Cleaned up old file:', filePath);
     }
     
     // Reset global variables
