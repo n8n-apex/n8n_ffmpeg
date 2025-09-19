@@ -931,11 +931,14 @@ app.post('/add-music-subtitles', async (req, res) => {
         .audioCodec('aac')
         .outputOptions([
           '-preset veryfast',
-          '-crf 23',
+          '-crf 18',            // Higher quality (lower CRF)
+          '-profile:v high',    // H.264 high profile for better quality
+          '-level:v 4.1',       // Compatibility level
+          '-pix_fmt yuv420p',   // Ensure compatibility
           '-threads 1',
           '-avoid_negative_ts make_zero',
           '-movflags', '+faststart',
-          '-y' // Overwrite output file if exists
+          '-y'
         ])
         .on('start', (commandLine) => {
           console.log('FFmpeg command:', commandLine);
