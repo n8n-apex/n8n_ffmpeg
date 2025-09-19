@@ -344,13 +344,13 @@ const downloadGoogleDriveFile = async (fileId, filepath) => {
 const compressVideo = (inputPath, outputPath, options = {}) => {
   return new Promise((resolve, reject) => {
     const {
-      crf = 23,
+      crf = 18,
       preset = 'slow',
       maxrate = '3M',
       bufsize = '6M',
       audioBitrate = '96k',
-      maxWidth = 1280,
-      maxHeight = 720,
+      maxWidth = 1080,
+      maxHeight = 1080,
       timeout = 600000  // 10 minutes default timeout
     } = options;
 
