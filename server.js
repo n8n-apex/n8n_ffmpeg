@@ -698,7 +698,7 @@ app.post('/process-video', async (req, res) => {
         .audioCodec('aac')
         .outputOptions([
           '-preset slow',
-          '-crf 23',
+          '-crf 18',
           '-threads 1',
           '-avoid_negative_ts make_zero'  // Helps with timing issues
         ])
